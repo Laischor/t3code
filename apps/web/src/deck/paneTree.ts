@@ -370,6 +370,49 @@ export function reorderTab(
   });
 }
 
+/**
+ * Moves a tab into another pane at `toIndex`, focusing it there.
+ *
+ * A source pane left with no tabs is closed, so the surrounding split collapses
+ * the same way it does when the last tab is closed.
+ */
+export function moveTabToPane(
+  root: DeckPaneNode | null,
+  tabId: string,
+  targetPaneId: string,
+  toIndex: number,
+): DeckPaneNode | null {
+  if (!root) return root;
+  const source = findPaneForTab(root, tabId);
+  const target = findLeaf(root, targetPaneId);
+  if (!source || !target) return root;
+  if (source.id === target.id) return reorderTab(root, tabId, toIndex);
+
+  const moved = source.tabs.find((tab) => tab.id === tabId);
+  if (!moved) return root;
+
+  const withoutTab =
+    source.tabs.length <= 1
+      ? closePane(root, source.id)
+      : mapLeaf(root, source.id, (leaf) => {
+          const index = leaf.tabs.findIndex((tab) => tab.id === tabId);
+          const tabs = leaf.tabs.filter((tab) => tab.id !== tabId);
+          const activeTabId =
+            leaf.activeTabId === tabId
+              ? ((tabs[index] ?? tabs[tabs.length - 1])?.id ?? "")
+              : leaf.activeTabId;
+          return { ...leaf, tabs, activeTabId };
+        });
+  if (!withoutTab) return null;
+
+  return mapLeaf(withoutTab, targetPaneId, (leaf) => {
+    const clamped = Math.min(Math.max(toIndex, 0), leaf.tabs.length);
+    const tabs = [...leaf.tabs];
+    tabs.splice(clamped, 0, moved);
+    return { ...leaf, tabs, activeTabId: moved.id };
+  });
+}
+
 export function setActiveTab(
   root: DeckPaneNode | null,
   paneId: string,

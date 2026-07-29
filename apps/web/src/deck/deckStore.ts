@@ -18,6 +18,7 @@ import {
   closeTab,
   findLeaf,
   findPaneForTab,
+  moveTabToPane,
   nextActivePaneId,
   normalizePaneTree,
   paneLeaves,
@@ -176,6 +177,13 @@ interface DeckStoreState {
   setActiveTab: (threadRef: ScopedThreadRef, paneId: string, tabId: string) => void;
   /** Moves a tab within its pane. */
   reorderTab: (threadRef: ScopedThreadRef, tabId: string, toIndex: number) => void;
+  /** Moves a tab into another pane, closing the source pane if it empties. */
+  moveTabToPane: (
+    threadRef: ScopedThreadRef,
+    tabId: string,
+    targetPaneId: string,
+    toIndex: number,
+  ) => void;
   /** Renames a tab; a blank name clears it back to the derived label. */
   renameTab: (threadRef: ScopedThreadRef, tabId: string, title: string) => void;
   /** Attaches the backing session id once the preview session has opened. */
@@ -272,6 +280,16 @@ export const useDeckStore = create<DeckStoreState>()(
           update(threadRef, (state) => {
             const root = reorderTab(state.root, tabId, toIndex);
             return root === state.root ? state : { ...state, root };
+          }),
+
+        moveTabToPane: (threadRef, tabId, targetPaneId, toIndex) =>
+          update(threadRef, (state) => {
+            const root = moveTabToPane(state.root, tabId, targetPaneId, toIndex);
+            if (root === state.root) return state;
+            return {
+              root,
+              activePaneId: findLeaf(root, targetPaneId) ? targetPaneId : state.activePaneId,
+            };
           }),
 
         renameTab: (threadRef, tabId, title) =>

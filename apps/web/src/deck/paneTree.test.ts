@@ -16,6 +16,7 @@ import {
   closeTab,
   findPaneForTab,
   findTab,
+  moveTabToPane,
   paneTabs,
   reorderTab,
   setActiveTab,
@@ -405,6 +406,43 @@ describe("tabs", () => {
       activeTabId: "t1",
     });
     expect(findTab(normalized, "t1")?.title).toBeUndefined();
+  });
+
+  it("moves a tab into another pane and focuses it there", () => {
+    let root: DeckPaneNode | null = splitPane(leaf("a"), "a", "horizontal", leaf("b"), splitIds());
+    root = addTab(root, "a", tab("extra"));
+
+    root = moveTabToPane(root, "extra", "b", 0);
+    expect(findLeaf(root, "a")?.tabs.map((t) => t.id)).toEqual(["a-tab"]);
+    const target = findLeaf(root, "b");
+    expect(target?.tabs.map((t) => t.id)).toEqual(["extra", "b-tab"]);
+    expect(target?.activeTabId).toBe("extra");
+  });
+
+  it("closes a source pane emptied by the move", () => {
+    const root = splitPane(leaf("a"), "a", "horizontal", leaf("b"), splitIds());
+    const moved = moveTabToPane(root, "a-tab", "b", 1);
+    expect(isSplit(moved!)).toBe(false);
+    expect(findLeaf(moved, "b")?.tabs.map((t) => t.id)).toEqual(["b-tab", "a-tab"]);
+  });
+
+  it("falls back to a plain reorder within the same pane", () => {
+    let root: DeckPaneNode | null = leaf("a");
+    root = addTab(root, "a", tab("t2"));
+    root = moveTabToPane(root, "t2", "a", 0);
+    expect(findLeaf(root, "a")?.tabs.map((t) => t.id)).toEqual(["t2", "a-tab"]);
+  });
+
+  it("ignores an unknown tab or pane", () => {
+    const root = splitPane(leaf("a"), "a", "horizontal", leaf("b"), splitIds());
+    expect(moveTabToPane(root, "missing", "b", 0)).toBe(root);
+    expect(moveTabToPane(root, "a-tab", "missing", 0)).toBe(root);
+  });
+
+  it("clamps the target index", () => {
+    const root = splitPane(leaf("a"), "a", "horizontal", leaf("b"), splitIds());
+    const moved = moveTabToPane(root, "a-tab", "b", 99);
+    expect(findLeaf(moved, "b")?.tabs.map((t) => t.id)).toEqual(["b-tab", "a-tab"]);
   });
 
   it("updates a tab in place", () => {

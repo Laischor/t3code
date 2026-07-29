@@ -80,6 +80,9 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   // The browser tab that should open with its URL bar focused, cleared once it
   // has been handled so switching back later does not steal focus again.
   const [pendingUrlFocusTabId, setPendingUrlFocusTabId] = useState<string | null>(null);
+  // Shared across panes: dragover cannot read dataTransfer, so the dragged tab
+  // has to be known outside the strip it started in.
+  const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
 
   const usedTerminalIds = useMemo(
     () =>
@@ -164,9 +167,10 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
     [threadRef],
   );
 
-  const reorderTab = useCallback(
-    (tabId: string, toIndex: number) => {
-      useDeckStore.getState().reorderTab(threadRef, tabId, toIndex);
+  const moveTab = useCallback(
+    (tabId: string, targetPaneId: string, toIndex: number) => {
+      useDeckStore.getState().moveTabToPane(threadRef, tabId, targetPaneId, toIndex);
+      setFocusRequestId((value) => value + 1);
     },
     [threadRef],
   );
@@ -267,7 +271,9 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         pendingUrlFocusTabId={pendingUrlFocusTabId}
         onUrlFocused={() => setPendingUrlFocusTabId(null)}
         onRenameTab={renameTab}
-        onReorderTab={reorderTab}
+        onMoveTab={moveTab}
+        draggingTabId={draggingTabId}
+        onDragTabChange={setDraggingTabId}
         insetForTitlebar={leaf.id === firstPaneId}
       />
     ),
@@ -280,9 +286,10 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       keybindings,
       runtimeEnv,
       firstPaneId,
+      draggingTabId,
+      moveTab,
       pendingUrlFocusTabId,
       renameTab,
-      reorderTab,
       splitPane,
       threadRef,
       worktreePath,
@@ -392,7 +399,9 @@ interface PaneTabsProps {
   pendingUrlFocusTabId: string | null;
   onUrlFocused: () => void;
   onRenameTab: (tabId: string, title: string) => void;
-  onReorderTab: (tabId: string, toIndex: number) => void;
+  onMoveTab: (tabId: string, targetPaneId: string, toIndex: number) => void;
+  draggingTabId: string | null;
+  onDragTabChange: (tabId: string | null) => void;
   /** Leaves room for the window controls when the sidebar is collapsed. */
   insetForTitlebar: boolean;
 }
@@ -413,13 +422,14 @@ function PaneTabs({
   pendingUrlFocusTabId,
   onUrlFocused,
   onRenameTab,
-  onReorderTab,
+  onMoveTab,
+  draggingTabId,
+  onDragTabChange,
   insetForTitlebar,
 }: PaneTabsProps) {
   const current = activeTab(leaf);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
-  const dragTabIdRef = useRef<string | null>(null);
 
   return (
     <>
@@ -429,14 +439,20 @@ function PaneTabs({
           isActive ? "text-foreground" : "text-muted-foreground",
         )}
         onDragOver={(event) => {
-          if (dragTabIdRef.current) event.preventDefault();
+          if (!draggingTabId) return;
+          event.preventDefault();
+          // Dropping past the last tab, or onto empty space in the strip.
+          setDropIndex((current) => current ?? leaf.tabs.length);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setDropIndex(null);
         }}
         onDrop={(event) => {
-          const dragged = dragTabIdRef.current;
-          if (!dragged || dropIndex === null) return;
+          if (!draggingTabId) return;
           event.preventDefault();
-          onReorderTab(dragged, dropIndex);
-          dragTabIdRef.current = null;
+          onMoveTab(draggingTabId, leaf.id, dropIndex ?? leaf.tabs.length);
+          onDragTabChange(null);
           setDropIndex(null);
         }}
       >
@@ -458,18 +474,19 @@ function PaneTabs({
               aria-selected={selected}
               draggable={!renaming}
               onDragStart={(event) => {
-                dragTabIdRef.current = tab.id;
+                onDragTabChange(tab.id);
                 event.dataTransfer.effectAllowed = "move";
                 // Firefox refuses to start a drag without payload.
                 event.dataTransfer.setData("text/plain", tab.id);
               }}
               onDragEnd={() => {
-                dragTabIdRef.current = null;
+                onDragTabChange(null);
                 setDropIndex(null);
               }}
               onDragOver={(event) => {
-                if (!dragTabIdRef.current) return;
+                if (!draggingTabId) return;
                 event.preventDefault();
+                event.stopPropagation();
                 // Past the midpoint the tab belongs after this one.
                 const rect = event.currentTarget.getBoundingClientRect();
                 const after = event.clientX > rect.left + rect.width / 2;
