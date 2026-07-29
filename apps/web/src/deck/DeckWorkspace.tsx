@@ -45,6 +45,7 @@ import { matchDeckShortcut, stepTabIndex } from "./deckShortcuts";
 import {
   activeTab,
   findLeaf,
+  paneLeaves,
   paneTabs,
   type DeckPaneLeaf,
   type DeckSplitDirection,
@@ -229,6 +230,10 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [addTab, closeTab, cycleTab, threadRef]);
 
+  // Depth-first order puts the top-left pane first: the only one the macOS
+  // traffic lights can reach once the sidebar is collapsed.
+  const firstPaneId = useMemo(() => paneLeaves(paneState.root)[0]?.id ?? null, [paneState.root]);
+
   const renderPane = useCallback(
     (leaf: DeckPaneLeaf, isActive: boolean) => (
       <PaneTabs
@@ -246,6 +251,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         onSplit={splitPane}
         pendingUrlFocusTabId={pendingUrlFocusTabId}
         onUrlFocused={() => setPendingUrlFocusTabId(null)}
+        insetForTitlebar={leaf.id === firstPaneId}
       />
     ),
     [
@@ -256,6 +262,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       focusRequestId,
       keybindings,
       runtimeEnv,
+      firstPaneId,
       pendingUrlFocusTabId,
       splitPane,
       threadRef,
@@ -265,10 +272,6 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div
-        aria-hidden
-        className="drag-region h-0 shrink-0 [[data-sidebar-state=collapsed]_&]:h-[var(--workspace-topbar-height)]"
-      />
       <div className="min-h-0 flex-1 p-1">
         {paneState.root ? (
           <DeckPaneGrid
@@ -314,6 +317,8 @@ interface PaneTabsProps {
   /** Tab that should open with its URL bar focused, if it is in this pane. */
   pendingUrlFocusTabId: string | null;
   onUrlFocused: () => void;
+  /** Leaves room for the window controls when the sidebar is collapsed. */
+  insetForTitlebar: boolean;
 }
 
 function PaneTabs({
@@ -331,6 +336,7 @@ function PaneTabs({
   onSplit,
   pendingUrlFocusTabId,
   onUrlFocused,
+  insetForTitlebar,
 }: PaneTabsProps) {
   const current = activeTab(leaf);
 
@@ -342,6 +348,14 @@ function PaneTabs({
           isActive ? "text-foreground" : "text-muted-foreground",
         )}
       >
+        {insetForTitlebar ? (
+          // Doubles as somewhere to grab the window, which the tab strip
+          // otherwise leaves nowhere for.
+          <div
+            aria-hidden
+            className="drag-region hidden shrink-0 [[data-sidebar-state=collapsed]_&]:block [[data-sidebar-state=collapsed]_&]:w-[var(--workspace-titlebar-content-left)]"
+          />
+        ) : null}
         {leaf.tabs.map((tab) => {
           const selected = tab.id === current?.id;
           return (
