@@ -86,16 +86,28 @@ describe("BrowserSession", () => {
         return granted;
       };
 
-      for (const permission of [
-        "clipboard-read",
-        "clipboard-sanitized-write",
-        "notifications",
-        "geolocation",
-      ]) {
-        assert.isTrue(requestAllows(permission), `request handler should allow ${permission}`);
-        assert.isTrue(
+      // Writing is not a disclosure and ordinary Copy buttons depend on it, so
+      // it stays granted outright.
+      assert.isTrue(
+        requestAllows("clipboard-sanitized-write"),
+        "request handler should allow clipboard-sanitized-write",
+      );
+      assert.isTrue(
+        checkHandler(null, "clipboard-sanitized-write") as boolean,
+        "check handler should allow clipboard-sanitized-write",
+      );
+
+      // Anything that reveals the user now needs consent per origin. With no
+      // requesting origin there is nothing to attribute a grant to, so both
+      // handlers refuse without prompting.
+      for (const permission of ["clipboard-read", "notifications", "geolocation"]) {
+        assert.isFalse(
+          requestAllows(permission),
+          `request handler should not silently allow ${permission}`,
+        );
+        assert.isFalse(
           checkHandler(null, permission) as boolean,
-          `check handler should allow ${permission}`,
+          `check handler should not allow ungranted ${permission}`,
         );
       }
 

@@ -1,5 +1,5 @@
 import type { Session } from "electron";
-import { session } from "electron";
+import { dialog, session } from "electron";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -9,21 +9,35 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+import {
+  classifyPreviewPermission,
+  permissionDecisionKey,
+  permissionOrigin,
+  permissionPromptMessage,
+} from "./previewPermissions.ts";
+
 const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
 
-// Permissions granted to preview web content. `clipboard-sanitized-write` is the
-// Electron permission behind `navigator.clipboard.writeText()` — note it is NOT
-// `clipboard-write`, which is not a valid Electron permission name. Async
-// clipboard writes are gated by the permission *check* handler (not only the
-// request handler), so both handlers must allow it; otherwise built-in "Copy"
-// buttons — e.g. the Next.js / Vercel error overlay — fail with
-// `Failed to execute 'writeText' on 'Clipboard': Write permission denied`.
-const ALLOWED_PREVIEW_PERMISSIONS: ReadonlySet<string> = new Set([
-  "clipboard-read",
-  "clipboard-sanitized-write",
-  "notifications",
-  "geolocation",
-]);
+/**
+ * Remembered permission answers, keyed by partition + origin + permission.
+ *
+ * Kept for the run of the app rather than persisted: a wrong "allow" should not
+ * outlive a restart, and the prompt is cheap to answer again.
+ */
+const permissionDecisions = new Map<string, boolean>();
+
+/**
+ * The permission *check* handler is synchronous, so it can only answer from
+ * what has already been decided. Unknown means not granted — which is the
+ * correct answer for `navigator.permissions.query()` before any prompt.
+ */
+function answerPermissionCheck(partition: string, requestingUrl: string, permission: string) {
+  const policy = classifyPreviewPermission(permission);
+  if (policy !== "ask") return policy === "allow";
+  const origin = permissionOrigin(requestingUrl);
+  if (!origin) return false;
+  return permissionDecisions.get(permissionDecisionKey(partition, origin, permission)) ?? false;
+}
 
 export class BrowserSessionPartitionDerivationError extends Schema.TaggedErrorClass<BrowserSessionPartitionDerivationError>()(
   "BrowserSessionPartitionDerivationError",
@@ -133,11 +147,55 @@ export const make = Effect.gen(function* BrowserSessionMake() {
             .replace(/Electron\/[\d.]+ /, "")
             .replace(/\s*t3code\/[\d.]+/, "");
           browserSession.setUserAgent(userAgent);
-          browserSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-            callback(ALLOWED_PREVIEW_PERMISSIONS.has(permission));
-          });
-          browserSession.setPermissionCheckHandler((_webContents, permission) =>
-            ALLOWED_PREVIEW_PERMISSIONS.has(permission),
+          browserSession.setPermissionRequestHandler(
+            (webContents, permission, callback, details) => {
+              const policy = classifyPreviewPermission(permission);
+              if (policy !== "ask") {
+                callback(policy === "allow");
+                return;
+              }
+
+              const origin = permissionOrigin(
+                details?.requestingUrl || webContents?.getURL() || undefined,
+              );
+              // Nothing to attribute a grant to (opaque origin, about:blank, ...).
+              if (!origin) {
+                callback(false);
+                return;
+              }
+
+              const key = permissionDecisionKey(partition, origin, permission);
+              const remembered = permissionDecisions.get(key);
+              if (remembered !== undefined) {
+                callback(remembered);
+                return;
+              }
+
+              void dialog
+                .showMessageBox({
+                  type: "question",
+                  buttons: ["Block", "Allow"],
+                  defaultId: 0,
+                  cancelId: 0,
+                  title: "Permission request",
+                  message: permissionPromptMessage(origin, permission),
+                  detail: "Remembered until the app restarts.",
+                  noLink: true,
+                })
+                .then(({ response }) => {
+                  const granted = response === 1;
+                  permissionDecisions.set(key, granted);
+                  callback(granted);
+                })
+                .catch(() => callback(false));
+            },
+          );
+          browserSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) =>
+            answerPermissionCheck(
+              partition,
+              requestingOrigin || webContents?.getURL() || "",
+              permission,
+            ),
           );
           const next = new Map(sessions);
           next.set(partition, browserSession);
