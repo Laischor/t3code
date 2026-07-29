@@ -11,6 +11,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import { getTerminalLabel, nextTerminalId } from "@t3tools/shared/terminalLabels";
 import {
+  ChevronDownIcon,
   Code2,
   Globe,
   PlusIcon,
@@ -32,7 +33,7 @@ import {
 
 import { openPreviewSession } from "~/components/preview/openPreviewSession";
 import { TerminalViewport } from "~/components/TerminalViewport";
-import { Button } from "~/components/ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { cn } from "~/lib/utils";
 import { previewEnvironment } from "../state/preview";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -40,8 +41,10 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { DeckDevToolsSlot } from "./DeckDevToolsSlot";
 import { DeckPaneGrid } from "./DeckPaneGrid";
 import { createPaneLeaf, createTab, selectThreadPaneState, useDeckStore } from "./deckStore";
+import { matchDeckShortcut, stepTabIndex } from "./deckShortcuts";
 import {
   activeTab,
+  findLeaf,
   paneTabs,
   type DeckPaneLeaf,
   type DeckSplitDirection,
@@ -170,6 +173,48 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
     [threadRef],
   );
 
+  const cycleTab = useCallback(
+    (direction: 1 | -1) => {
+      const state = useDeckStore.getState();
+      const current = selectThreadPaneState(state.paneStateByThreadKey, threadRef);
+      const pane = findLeaf(current.root, current.activePaneId);
+      if (!pane) return;
+      const index = pane.tabs.findIndex((entry) => entry.id === pane.activeTabId);
+      const next = stepTabIndex(pane.tabs.length, index, direction);
+      if (next === null) return;
+      const target = pane.tabs[next];
+      if (target) activateTab(pane.id, target.id);
+    },
+    [activateTab, threadRef],
+  );
+
+  // Capture phase: xterm claims keys on the terminal element, and a bubbling
+  // listener would never see them.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const shortcut = matchDeckShortcut(event);
+      if (!shortcut) return;
+      event.preventDefault();
+      event.stopPropagation();
+      switch (shortcut) {
+        case "tab.newTerminal":
+          addTab("terminal");
+          break;
+        case "tab.newBrowser":
+          addTab("browser");
+          break;
+        case "tab.next":
+          cycleTab(1);
+          break;
+        case "tab.previous":
+          cycleTab(-1);
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [addTab, cycleTab]);
+
   const renderPane = useCallback(
     (leaf: DeckPaneLeaf, isActive: boolean) => (
       <PaneTabs
@@ -184,6 +229,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         onSelectTab={(tabId) => activateTab(leaf.id, tabId)}
         onCloseTab={closeTab}
         onAddTab={(kind) => addTab(kind, leaf.id)}
+        onSplit={splitPane}
       />
     ),
     [
@@ -194,6 +240,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       focusRequestId,
       keybindings,
       runtimeEnv,
+      splitPane,
       threadRef,
       worktreePath,
     ],
@@ -201,32 +248,6 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1.5">
-        <Button size="sm" variant="ghost" onClick={() => addTab("terminal")}>
-          <PlusIcon className="size-3.5" />
-          Terminal
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => addTab("browser")}>
-          <Globe className="size-3.5" />
-          Browser
-        </Button>
-        <div className="mx-1 h-4 w-px bg-border" />
-        <Button
-          size="sm"
-          variant="ghost"
-          title="Split right"
-          onClick={() => splitPane("horizontal")}
-        >
-          <SquareSplitHorizontal className="size-3.5" />
-        </Button>
-        <Button size="sm" variant="ghost" title="Split down" onClick={() => splitPane("vertical")}>
-          <SquareSplitVertical className="size-3.5" />
-        </Button>
-        <span className="ml-auto truncate text-xs text-muted-foreground" title={cwd}>
-          {cwd}
-        </span>
-      </div>
-
       <div className="min-h-0 flex-1 p-1">
         {paneState.root ? (
           <DeckPaneGrid
@@ -268,6 +289,7 @@ interface PaneTabsProps {
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onAddTab: (kind: DeckTab["kind"]) => void;
+  onSplit: (direction: DeckSplitDirection) => void;
 }
 
 function PaneTabs({
@@ -282,6 +304,7 @@ function PaneTabs({
   onSelectTab,
   onCloseTab,
   onAddTab,
+  onSplit,
 }: PaneTabsProps) {
   const current = activeTab(leaf);
 
@@ -330,8 +353,8 @@ function PaneTabs({
         <button
           type="button"
           aria-label="New terminal tab"
-          title="New terminal tab"
-          className="flex shrink-0 items-center px-2 hover:bg-accent/30"
+          title="New terminal tab (⌘T)"
+          className="flex shrink-0 items-center pl-2 pr-1 hover:bg-accent/30"
           onClick={(event) => {
             event.stopPropagation();
             onAddTab("terminal");
@@ -339,6 +362,60 @@ function PaneTabs({
         >
           <PlusIcon className="size-3" />
         </button>
+        <Menu>
+          <MenuTrigger
+            render={
+              <button
+                type="button"
+                aria-label="New tab of another kind"
+                title="New tab of another kind"
+                className="flex shrink-0 items-center pr-2 text-muted-foreground hover:bg-accent/30 hover:text-foreground"
+              />
+            }
+          >
+            <ChevronDownIcon className="size-3" />
+          </MenuTrigger>
+          <MenuPopup align="start" sideOffset={4} className="min-w-44">
+            <MenuItem onClick={() => onAddTab("terminal")}>
+              <TerminalSquare className="size-3.5" />
+              Terminal
+              <span className="ml-auto text-xs text-muted-foreground">⌘T</span>
+            </MenuItem>
+            <MenuItem onClick={() => onAddTab("browser")}>
+              <Globe className="size-3.5" />
+              Browser
+              <span className="ml-auto text-xs text-muted-foreground">⇧⌘T</span>
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+
+        {/* Splitting acts on this pane, so it belongs to this strip. */}
+        <div className="ml-auto flex shrink-0 items-center gap-px pr-1">
+          <button
+            type="button"
+            aria-label="Split right"
+            title="Split right"
+            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSplit("horizontal");
+            }}
+          >
+            <SquareSplitHorizontal className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Split down"
+            title="Split down"
+            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSplit("vertical");
+            }}
+          >
+            <SquareSplitVertical className="size-3.5" />
+          </button>
+        </div>
       </div>
 
       {/*
