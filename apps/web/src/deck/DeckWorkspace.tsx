@@ -76,6 +76,9 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const [focusRequestId, setFocusRequestId] = useState(0);
+  // The browser tab that should open with its URL bar focused, cleared once it
+  // has been handled so switching back later does not steal focus again.
+  const [pendingUrlFocusTabId, setPendingUrlFocusTabId] = useState<string | null>(null);
 
   const usedTerminalIds = useMemo(
     () =>
@@ -127,7 +130,10 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
           : createTab({ kind, previewTabId: null });
       useDeckStore.getState().addTab(threadRef, pane, tab);
       setFocusRequestId((value) => value + 1);
-      if (kind === "browser") void openBrowserSession(tab);
+      if (kind === "browser") {
+        setPendingUrlFocusTabId(tab.id);
+        void openBrowserSession(tab);
+      }
     },
     [openBrowserSession, targetPaneId, threadRef, usedTerminalIds],
   );
@@ -209,11 +215,19 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         case "tab.previous":
           cycleTab(-1);
           break;
+        case "tab.close": {
+          const state = useDeckStore.getState();
+          const current = selectThreadPaneState(state.paneStateByThreadKey, threadRef);
+          const pane = findLeaf(current.root, current.activePaneId);
+          const active = pane ? activeTab(pane) : null;
+          if (active) closeTab(active.id);
+          break;
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [addTab, cycleTab]);
+  }, [addTab, closeTab, cycleTab, threadRef]);
 
   const renderPane = useCallback(
     (leaf: DeckPaneLeaf, isActive: boolean) => (
@@ -230,6 +244,8 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         onCloseTab={closeTab}
         onAddTab={(kind) => addTab(kind, leaf.id)}
         onSplit={splitPane}
+        pendingUrlFocusTabId={pendingUrlFocusTabId}
+        onUrlFocused={() => setPendingUrlFocusTabId(null)}
       />
     ),
     [
@@ -240,6 +256,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       focusRequestId,
       keybindings,
       runtimeEnv,
+      pendingUrlFocusTabId,
       splitPane,
       threadRef,
       worktreePath,
@@ -248,6 +265,10 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <div
+        aria-hidden
+        className="drag-region h-0 shrink-0 [[data-sidebar-state=collapsed]_&]:h-[var(--workspace-topbar-height)]"
+      />
       <div className="min-h-0 flex-1 p-1">
         {paneState.root ? (
           <DeckPaneGrid
@@ -290,6 +311,9 @@ interface PaneTabsProps {
   onCloseTab: (tabId: string) => void;
   onAddTab: (kind: DeckTab["kind"]) => void;
   onSplit: (direction: DeckSplitDirection) => void;
+  /** Tab that should open with its URL bar focused, if it is in this pane. */
+  pendingUrlFocusTabId: string | null;
+  onUrlFocused: () => void;
 }
 
 function PaneTabs({
@@ -305,6 +329,8 @@ function PaneTabs({
   onCloseTab,
   onAddTab,
   onSplit,
+  pendingUrlFocusTabId,
+  onUrlFocused,
 }: PaneTabsProps) {
   const current = activeTab(leaf);
 
@@ -449,7 +475,13 @@ function PaneTabs({
                   onExited={() => onCloseTab(tab.id)}
                 />
               ) : (
-                <BrowserTab tab={tab} threadRef={threadRef} visible={selected} />
+                <BrowserTab
+                  tab={tab}
+                  threadRef={threadRef}
+                  visible={selected}
+                  autoFocusUrl={tab.id === pendingUrlFocusTabId}
+                  onUrlFocused={onUrlFocused}
+                />
               )}
             </div>
           );
@@ -506,9 +538,14 @@ function BrowserTab({
   tab,
   threadRef,
   visible,
+  autoFocusUrl,
+  onUrlFocused,
 }: {
   tab: DeckTab;
   threadRef: ScopedThreadRef;
+  /** True for a freshly opened tab, so it starts in the URL bar. */
+  autoFocusUrl: boolean;
+  onUrlFocused: () => void;
   /**
    * CSS cannot hide an Electron `<webview>` — the guest composites in its own
    * layer, so `visibility: hidden` on an ancestor leaves it painted on top.
@@ -518,7 +555,15 @@ function BrowserTab({
   visible: boolean;
 }) {
   const previewTabId = tab.previewTabId ?? null;
+  const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [devToolsHeight, setDevToolsHeight] = useState(0);
+
+  // Only once the session exists, since the URL bar is disabled until then.
+  useEffect(() => {
+    if (!autoFocusUrl || !previewTabId) return;
+    setFocusUrlNonce((value) => (value ?? 0) + 1);
+    onUrlFocused();
+  }, [autoFocusUrl, onUrlFocused, previewTabId]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const devToolsOpen = devToolsHeight > 0;
 
@@ -562,6 +607,7 @@ function BrowserTab({
               threadRef={threadRef}
               tabId={previewTabId}
               visible={visible}
+              focusUrlNonce={focusUrlNonce}
             />
           </Suspense>
         ) : (

@@ -60,6 +60,8 @@ interface Props {
   tabId?: string | null;
   configuredUrls?: ReadonlyArray<string> | undefined;
   visible: boolean;
+  /** Bumping this focuses and selects the URL input. */
+  focusUrlNonce?: number | undefined;
 }
 
 const localApi = typeof window === "undefined" ? null : ensureLocalApi();
@@ -68,8 +70,21 @@ const localApi = typeof window === "undefined" ? null : ensureLocalApi();
  * Single-tab preview surface: chrome row on top, one webview below, empty
  * state when no session exists for the thread.
  */
-export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, visible }: Props) {
+export function PreviewView({
+  threadRef,
+  tabId: requestedTabId,
+  configuredUrls,
+  visible,
+  focusUrlNonce: requestedFocusUrlNonce,
+}: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
+
+  // Hosts can ask for the URL bar without going through the action bus, which
+  // is a global event every visible preview would answer.
+  useEffect(() => {
+    if (requestedFocusUrlNonce == null) return;
+    setFocusUrlNonce((value) => (value ?? 0) + 1);
+  }, [requestedFocusUrlNonce]);
   const [pickActive, setPickActive] = useState(false);
   const activeRecordingTabIds = useActiveBrowserRecordingTabIds();
   const pickActiveRef = useRef(false);

@@ -7,7 +7,12 @@
  * Pure matchers so the mapping can be tested without a DOM.
  */
 
-export type DeckShortcut = "tab.newTerminal" | "tab.newBrowser" | "tab.next" | "tab.previous";
+export type DeckShortcut =
+  | "tab.newTerminal"
+  | "tab.newBrowser"
+  | "tab.next"
+  | "tab.previous"
+  | "tab.close";
 
 export interface DeckShortcutEvent {
   readonly key: string;
@@ -29,6 +34,7 @@ export function matchDeckShortcut(event: DeckShortcutEvent): DeckShortcut | null
     if (key === "t") {
       return event.shiftKey ? "tab.newBrowser" : "tab.newTerminal";
     }
+    if (key === "w" && !event.shiftKey) return "tab.close";
     if (event.shiftKey && (key === "]" || key === "}")) return "tab.next";
     if (event.shiftKey && (key === "[" || key === "{")) return "tab.previous";
   }

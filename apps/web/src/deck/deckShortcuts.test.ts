@@ -19,6 +19,12 @@ describe("matchDeckShortcut", () => {
     expect(matchDeckShortcut(event("T", { metaKey: true, shiftKey: true }))).toBe("tab.newBrowser");
   });
 
+  it("closes the active tab with cmd+w", () => {
+    expect(matchDeckShortcut(event("w", { metaKey: true }))).toBe("tab.close");
+    // Shift+cmd+w closes windows elsewhere; leave it alone.
+    expect(matchDeckShortcut(event("w", { metaKey: true, shiftKey: true }))).toBeNull();
+  });
+
   it("cycles tabs with ctrl+tab", () => {
     expect(matchDeckShortcut(event("Tab", { ctrlKey: true }))).toBe("tab.next");
     expect(matchDeckShortcut(event("Tab", { ctrlKey: true, shiftKey: true }))).toBe("tab.previous");

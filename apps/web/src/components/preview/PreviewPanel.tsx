@@ -13,9 +13,18 @@ interface Props {
   tabId?: string | null;
   configuredUrls?: ReadonlyArray<string> | undefined;
   visible: boolean;
+  /** Bumping this focuses and selects the URL input. */
+  focusUrlNonce?: number | undefined;
 }
 
-export function PreviewPanel({ mode, threadRef, tabId, configuredUrls, visible }: Props) {
+export function PreviewPanel({
+  mode,
+  threadRef,
+  tabId,
+  configuredUrls,
+  visible,
+  focusUrlNonce,
+}: Props) {
   if (!isPreviewSupportedInRuntime()) {
     return (
       <PreviewPanelShell mode={mode}>
@@ -35,6 +44,7 @@ export function PreviewPanel({ mode, threadRef, tabId, configuredUrls, visible }
         {...(tabId !== undefined ? { tabId } : {})}
         configuredUrls={configuredUrls}
         visible={visible}
+        focusUrlNonce={focusUrlNonce}
       />
     </PreviewPanelShell>
   );

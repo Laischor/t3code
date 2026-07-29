@@ -170,7 +170,12 @@ export const make = Effect.gen(function* () {
                 },
                 { type: "separator" as const },
               ]),
-          { role: environment.platform === "darwin" ? "close" : "quit" },
+          // The menu keeps Close Window, but stops claiming ⌘W: Deck binds it to
+          // closing the active tab, and a registered accelerator is handled in
+          // the main process before the renderer ever sees the key.
+          environment.platform === "darwin"
+            ? { role: "close" as const, registerAccelerator: false }
+            : { role: "quit" as const },
         ],
       },
       { role: "editMenu" },
