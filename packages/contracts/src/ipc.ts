@@ -917,6 +917,11 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
   webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 
+export const DesktopPreviewDevToolsHostInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  hostWebContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
+});
+
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
@@ -1060,6 +1065,15 @@ export interface DesktopPreviewBridge {
   setColorScheme: (tabId: string, colorScheme: DesktopPreviewColorScheme) => Promise<void>;
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
+  /**
+   * Render the guest's DevTools into another `<webview>` instead of a detached
+   * window, so a host can pin them inside its own layout.
+   *
+   * `hostWebContentsId` must belong to a webview that has never navigated.
+   */
+  openDevToolsInHost: (tabId: string, hostWebContentsId: number) => Promise<void>;
+  /** Close the guest's DevTools, docked or detached. */
+  closeDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */
   clearCookies: () => Promise<void>;
   /** Drop the HTTP cache for the preview partition (all tabs). */

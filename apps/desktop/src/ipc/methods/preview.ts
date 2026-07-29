@@ -13,6 +13,7 @@ import {
   DesktopPreviewRecordingSaveInputSchema,
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
+  DesktopPreviewDevToolsHostInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
@@ -152,6 +153,23 @@ export const openDevTools = tabMethod(
   IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL,
   "desktop.ipc.preview.openDevTools",
   (manager, tabId) => manager.openDevTools(tabId),
+);
+export const openDevToolsInHost = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_OPEN_DEVTOOLS_IN_HOST_CHANNEL,
+  payload: DesktopPreviewDevToolsHostInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.openDevToolsInHost")(function* ({
+    tabId,
+    hostWebContentsId,
+  }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.openDevToolsInHost(tabId, hostWebContentsId);
+  }),
+});
+export const closeDevTools = tabMethod(
+  IpcChannels.PREVIEW_CLOSE_DEVTOOLS_CHANNEL,
+  "desktop.ipc.preview.closeDevTools",
+  (manager, tabId) => manager.closeDevTools(tabId),
 );
 export const cancelPickElement = tabMethod(
   IpcChannels.PREVIEW_CANCEL_PICK_ELEMENT_CHANNEL,
@@ -368,6 +386,8 @@ export const methods = [
   hardReload,
   setColorScheme,
   openDevTools,
+  openDevToolsInHost,
+  closeDevTools,
   clearCookies,
   clearCache,
   getPreviewConfig,

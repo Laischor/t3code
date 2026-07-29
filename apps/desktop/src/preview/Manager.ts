@@ -1714,6 +1714,54 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
   });
 
+  /**
+   * Renders the guest's DevTools into a caller-supplied `<webview>` rather than
+   * a detached window, so a host can pin them inside its own layout.
+   *
+   * Electron requires the host WebContents to be navigation-free and leaves its
+   * destruction to the caller, so the renderer owns the host webview's life.
+   */
+  const openDevToolsInHost = Effect.fn("PreviewManager.openDevToolsInHost")(function* (
+    tabId: string,
+    hostWebContentsId: number,
+  ) {
+    const wc = yield* requireWebContents(tabId);
+    const host = webContents.fromId(hostWebContentsId);
+    if (!host || host.isDestroyed()) {
+      return yield* Effect.fail(
+        new PreviewOperationError({
+          operation: "openDevToolsInHost",
+          tabId,
+          webContentsId: hostWebContentsId,
+          cause: new Error(`No live WebContents ${hostWebContentsId} to host DevTools`),
+        }),
+      );
+    }
+    if (wc.isDevToolsOpened()) {
+      return;
+    }
+    // DevTools hold the debugger, which is the same channel the automation
+    // control session uses; restore it once they close.
+    yield* detachControlSession(wc.id);
+    yield* attempt({ operation: "openDevToolsInHost", tabId, webContentsId: wc.id }, () => {
+      wc.once("devtools-closed", () => {
+        if (!wc.isDestroyed()) runFork(restoreControlSession(tabId, wc));
+      });
+      wc.setDevToolsWebContents(host);
+      wc.openDevTools();
+    });
+  });
+
+  const closeDevTools = Effect.fn("PreviewManager.closeDevTools")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    if (!wc.isDevToolsOpened()) {
+      return;
+    }
+    yield* attempt({ operation: "closeDevTools", tabId, webContentsId: wc.id }, () =>
+      wc.closeDevTools(),
+    );
+  });
+
   const setAnnotationTheme = Effect.fn("PreviewManager.setAnnotationTheme")(function* (
     theme: DesktopPreviewAnnotationTheme,
   ) {
@@ -3224,6 +3272,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     navigate,
     openPictureInPicture,
     openDevTools,
+    openDevToolsInHost,
+    closeDevTools,
     pickElement,
     refresh,
     registerWebview,
@@ -3529,6 +3579,11 @@ export class PreviewManager extends Context.Service<
       colorScheme: DesktopPreviewColorScheme,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly openDevToolsInHost: (
+      tabId: string,
+      hostWebContentsId: number,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    readonly closeDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: () => Effect.Effect<void, PreviewManagerError>;
     readonly clearCache: () => Effect.Effect<void, PreviewManagerError>;
     readonly getBrowserPartition: (scope?: string) => Effect.Effect<string, PreviewManagerError>;
@@ -3626,6 +3681,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     hardReload: operations.hardReload,
     setColorScheme: operations.setColorScheme,
     openDevTools: operations.openDevTools,
+    openDevToolsInHost: operations.openDevToolsInHost,
+    closeDevTools: operations.closeDevTools,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* () {
       yield* browserSession
         .clearCookies()
