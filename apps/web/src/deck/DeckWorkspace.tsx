@@ -31,13 +31,13 @@ import {
 } from "react";
 
 import { openPreviewSession } from "~/components/preview/openPreviewSession";
-import { previewBridge } from "~/components/preview/previewBridge";
 import { TerminalViewport } from "~/components/TerminalViewport";
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 import { previewEnvironment } from "../state/preview";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
+import { DeckDevToolsSlot } from "./DeckDevToolsSlot";
 import { DeckPaneGrid } from "./DeckPaneGrid";
 import { createPaneLeaf, createTab, selectThreadPaneState, useDeckStore } from "./deckStore";
 import {
@@ -50,6 +50,9 @@ import {
 
 // Lazily loaded exactly like ChatView does, so the preview surface stays in its
 // own chunk instead of being pulled into the main bundle.
+const DEVTOOLS_DEFAULT_HEIGHT = 320;
+const DEVTOOLS_MIN_HEIGHT = 120;
+
 const PreviewPanel = lazy(() =>
   import("~/components/preview/PreviewPanel").then((module) => ({
     default: module.PreviewPanel,
@@ -432,14 +435,48 @@ function BrowserTab({
   /**
    * CSS cannot hide an Electron `<webview>` — the guest composites in its own
    * layer, so `visibility: hidden` on an ancestor leaves it painted on top.
-   * T3 parks inactive surfaces off-screen instead, driven by this flag.
+   * T3 parks inactive surfaces off-screen instead, driven by this flag, and the
+   * docked DevTools view does the same.
    */
   visible: boolean;
 }) {
   const previewTabId = tab.previewTabId ?? null;
+  const [devToolsHeight, setDevToolsHeight] = useState(0);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const devToolsOpen = devToolsHeight > 0;
+
+  const devToolsHeightRef = useRef(devToolsHeight);
+  useEffect(() => {
+    devToolsHeightRef.current = devToolsHeight;
+  }, [devToolsHeight]);
+
+  const startDevToolsDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const body = bodyRef.current;
+    if (!body || event.button !== 0) return;
+    event.preventDefault();
+    const bodyHeight = body.getBoundingClientRect().height;
+    const startY = event.clientY;
+    const startHeight = devToolsHeightRef.current;
+    const target = event.currentTarget;
+    target.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const next = startHeight - (moveEvent.clientY - startY);
+      setDevToolsHeight(Math.min(Math.max(next, DEVTOOLS_MIN_HEIGHT), bodyHeight - 80));
+    };
+    const onUp = () => {
+      target.releasePointerCapture(event.pointerId);
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+    };
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
+  }, []);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1">
         {previewTabId ? (
           <Suspense fallback={<PaneMessage>Loading browser…</PaneMessage>}>
@@ -455,18 +492,37 @@ function BrowserTab({
         )}
       </div>
       {previewTabId ? (
-        <button
-          type="button"
-          aria-label="Open DevTools"
-          title="Open DevTools in a separate window"
-          className="flex h-5 shrink-0 items-center justify-center gap-1 border-t text-[10px] text-muted-foreground hover:bg-accent"
-          onClick={() => {
-            void previewBridge?.openDevTools(previewTabId);
-          }}
-        >
-          <Code2 className="size-3" />
-          DevTools
-        </button>
+        <>
+          {devToolsOpen ? (
+            <>
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                onPointerDown={startDevToolsDrag}
+                className="group flex h-1.5 shrink-0 cursor-row-resize items-center justify-center"
+              >
+                <div className="h-[2px] w-8 rounded-full bg-border/70 group-hover:bg-primary/60" />
+              </div>
+              <div className="shrink-0 border-t" style={{ height: devToolsHeight }}>
+                <DeckDevToolsSlot tabId={previewTabId} visible={visible} />
+              </div>
+            </>
+          ) : null}
+          <button
+            type="button"
+            aria-label={devToolsOpen ? "Hide DevTools" : "Show DevTools"}
+            aria-pressed={devToolsOpen}
+            title={devToolsOpen ? "Hide DevTools" : "Show DevTools"}
+            className={cn(
+              "flex h-5 shrink-0 items-center justify-center gap-1 border-t text-[10px] text-muted-foreground hover:bg-accent",
+              devToolsOpen && "bg-accent/60",
+            )}
+            onClick={() => setDevToolsHeight(devToolsOpen ? 0 : DEVTOOLS_DEFAULT_HEIGHT)}
+          >
+            <Code2 className="size-3" />
+            DevTools
+          </button>
+        </>
       ) : null}
     </div>
   );

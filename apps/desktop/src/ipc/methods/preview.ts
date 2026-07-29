@@ -13,7 +13,7 @@ import {
   DesktopPreviewRecordingSaveInputSchema,
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
-  DesktopPreviewDevToolsHostInputSchema,
+  DesktopPreviewDevToolsBoundsInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
@@ -154,16 +154,34 @@ export const openDevTools = tabMethod(
   "desktop.ipc.preview.openDevTools",
   (manager, tabId) => manager.openDevTools(tabId),
 );
-export const openDevToolsInHost = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_OPEN_DEVTOOLS_IN_HOST_CHANNEL,
-  payload: DesktopPreviewDevToolsHostInputSchema,
+export const openDevToolsDocked = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_OPEN_DEVTOOLS_DOCKED_CHANNEL,
+  payload: DesktopPreviewDevToolsBoundsInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.openDevToolsInHost")(function* ({
+  handler: Effect.fn("desktop.ipc.preview.openDevToolsDocked")(function* ({
     tabId,
-    hostWebContentsId,
+    x,
+    y,
+    width,
+    height,
   }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.openDevToolsInHost(tabId, hostWebContentsId);
+    yield* manager.openDevToolsDocked(tabId, { x, y, width, height });
+  }),
+});
+export const setDevToolsBounds = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_DEVTOOLS_BOUNDS_CHANNEL,
+  payload: DesktopPreviewDevToolsBoundsInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setDevToolsBounds")(function* ({
+    tabId,
+    x,
+    y,
+    width,
+    height,
+  }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setDevToolsBounds(tabId, { x, y, width, height });
   }),
 });
 export const closeDevTools = tabMethod(
@@ -386,7 +404,8 @@ export const methods = [
   hardReload,
   setColorScheme,
   openDevTools,
-  openDevToolsInHost,
+  openDevToolsDocked,
+  setDevToolsBounds,
   closeDevTools,
   clearCookies,
   clearCache,

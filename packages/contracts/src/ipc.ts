@@ -917,9 +917,12 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
   webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 
-export const DesktopPreviewDevToolsHostInputSchema = Schema.Struct({
+export const DesktopPreviewDevToolsBoundsInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
-  hostWebContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
+  x: Schema.Int,
+  y: Schema.Int,
+  width: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  height: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 });
 
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
@@ -1066,12 +1069,21 @@ export interface DesktopPreviewBridge {
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
   /**
-   * Render the guest's DevTools into another `<webview>` instead of a detached
-   * window, so a host can pin them inside its own layout.
+   * Dock the guest's DevTools into a main-process view positioned at `bounds`,
+   * so they can sit inside a pane instead of a detached window.
    *
-   * `hostWebContentsId` must belong to a webview that has never navigated.
+   * Bounds are window-relative CSS pixels; call `setDevToolsBounds` whenever
+   * the slot moves or resizes.
    */
-  openDevToolsInHost: (tabId: string, hostWebContentsId: number) => Promise<void>;
+  openDevToolsDocked: (
+    tabId: string,
+    bounds: { x: number; y: number; width: number; height: number },
+  ) => Promise<void>;
+  /** Reposition docked DevTools. No-op when they are not docked. */
+  setDevToolsBounds: (
+    tabId: string,
+    bounds: { x: number; y: number; width: number; height: number },
+  ) => Promise<void>;
   /** Close the guest's DevTools, docked or detached. */
   closeDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */

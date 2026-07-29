@@ -28,7 +28,15 @@ import type {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
-import { BrowserWindow, type Session, clipboard, nativeImage, shell, webContents } from "electron";
+import {
+  BrowserWindow,
+  WebContentsView,
+  type Session,
+  clipboard,
+  nativeImage,
+  shell,
+  webContents,
+} from "electron";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -461,6 +469,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
 
   const annotationThemeRef = yield* Ref.make(DEFAULT_ANNOTATION_THEME);
   const mainWindowRef = yield* Ref.make<Option.Option<BrowserWindow>>(Option.none());
+  /**
+   * Views hosting docked DevTools, one per tab.
+   *
+   * A fresh WebContentsView is the host Electron documents for
+   * setDevToolsWebContents: it has never navigated, which a <webview> cannot
+   * satisfy because it only creates its guest once a src is set.
+   */
+  const devToolsViews = new Map<string, WebContentsView>();
   const tabsRef = yield* SynchronizedRef.make<ReadonlyMap<string, PreviewTabState>>(new Map());
   const attachedRef = yield* Ref.make<ReadonlyMap<number, ManagedListeners>>(new Map());
   const listenersRef = yield* Ref.make<ReadonlySet<Listener>>(new Set());
@@ -1721,54 +1737,78 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
    * Electron requires the host WebContents to be navigation-free and leaves its
    * destruction to the caller, so the renderer owns the host webview's life.
    */
-  const openDevToolsInHost = Effect.fn("PreviewManager.openDevToolsInHost")(function* (
+  const destroyDevToolsView = (tabId: string) => {
+    const view = devToolsViews.get(tabId);
+    if (!view) return;
+    devToolsViews.delete(tabId);
+    const window = view.webContents.isDestroyed()
+      ? null
+      : BrowserWindow.fromWebContents(view.webContents);
+    try {
+      window?.contentView.removeChildView(view);
+    } catch {
+      // The window may already be gone during shutdown.
+    }
+    if (!view.webContents.isDestroyed()) view.webContents.close();
+  };
+
+  const openDevToolsDocked = Effect.fn("PreviewManager.openDevToolsDocked")(function* (
     tabId: string,
-    hostWebContentsId: number,
+    bounds: { x: number; y: number; width: number; height: number },
   ) {
     const wc = yield* requireWebContents(tabId);
-    const host = webContents.fromId(hostWebContentsId);
-    if (!host || host.isDestroyed()) {
+    const mainWindow = yield* Ref.get(mainWindowRef);
+    if (Option.isNone(mainWindow)) {
       return yield* Effect.fail(
         new PreviewOperationError({
-          operation: "openDevToolsInHost",
+          operation: "openDevToolsDocked",
           tabId,
-          webContentsId: hostWebContentsId,
-          cause: new Error(`No live WebContents ${hostWebContentsId} to host DevTools`),
+          webContentsId: wc.id,
+          cause: new Error("No main window to dock DevTools into"),
         }),
       );
     }
-    if (host.id === wc.id) {
-      return yield* Effect.fail(
-        new PreviewOperationError({
-          operation: "openDevToolsInHost",
-          tabId,
-          webContentsId: host.id,
-          cause: new Error("DevTools cannot be hosted by the page they inspect"),
-        }),
-      );
-    }
-    // Already-open DevTools are bound to whatever surface they were opened
-    // into; re-point them rather than leaving the caller with a blank host.
+    const window = mainWindow.value;
+
+    // Re-point DevTools that are already open somewhere else, otherwise the
+    // caller is left with an empty slot.
     if (wc.isDevToolsOpened()) {
-      yield* attempt({ operation: "openDevToolsInHost.close", tabId, webContentsId: wc.id }, () =>
+      yield* attempt({ operation: "openDevToolsDocked.close", tabId, webContentsId: wc.id }, () =>
         wc.closeDevTools(),
       );
     }
+    destroyDevToolsView(tabId);
+
     // DevTools hold the debugger, which is the same channel the automation
     // control session uses; restore it once they close.
     yield* detachControlSession(wc.id);
-    yield* attempt({ operation: "openDevToolsInHost", tabId, webContentsId: wc.id }, () => {
+    yield* attempt({ operation: "openDevToolsDocked", tabId, webContentsId: wc.id }, () => {
+      const view = new WebContentsView();
+      devToolsViews.set(tabId, view);
+      window.contentView.addChildView(view);
+      view.setBounds(bounds);
       wc.once("devtools-closed", () => {
+        destroyDevToolsView(tabId);
         if (!wc.isDestroyed()) runFork(restoreControlSession(tabId, wc));
       });
-      wc.setDevToolsWebContents(host);
+      wc.setDevToolsWebContents(view.webContents);
       wc.openDevTools();
     });
+  });
+
+  const setDevToolsBounds = Effect.fn("PreviewManager.setDevToolsBounds")(function* (
+    tabId: string,
+    bounds: { x: number; y: number; width: number; height: number },
+  ) {
+    const view = devToolsViews.get(tabId);
+    if (!view || view.webContents.isDestroyed()) return;
+    yield* attempt({ operation: "setDevToolsBounds", tabId }, () => view.setBounds(bounds));
   });
 
   const closeDevTools = Effect.fn("PreviewManager.closeDevTools")(function* (tabId: string) {
     const wc = yield* requireWebContents(tabId);
     if (!wc.isDevToolsOpened()) {
+      destroyDevToolsView(tabId);
       return;
     }
     yield* attempt({ operation: "closeDevTools", tabId, webContentsId: wc.id }, () =>
@@ -3286,7 +3326,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     navigate,
     openPictureInPicture,
     openDevTools,
-    openDevToolsInHost,
+    openDevToolsDocked,
+    setDevToolsBounds,
     closeDevTools,
     pickElement,
     refresh,
@@ -3593,9 +3634,13 @@ export class PreviewManager extends Context.Service<
       colorScheme: DesktopPreviewColorScheme,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
-    readonly openDevToolsInHost: (
+    readonly openDevToolsDocked: (
       tabId: string,
-      hostWebContentsId: number,
+      bounds: { x: number; y: number; width: number; height: number },
+    ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setDevToolsBounds: (
+      tabId: string,
+      bounds: { x: number; y: number; width: number; height: number },
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly closeDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: () => Effect.Effect<void, PreviewManagerError>;
@@ -3695,7 +3740,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     hardReload: operations.hardReload,
     setColorScheme: operations.setColorScheme,
     openDevTools: operations.openDevTools,
-    openDevToolsInHost: operations.openDevToolsInHost,
+    openDevToolsDocked: operations.openDevToolsDocked,
+    setDevToolsBounds: operations.setDevToolsBounds,
     closeDevTools: operations.closeDevTools,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* () {
       yield* browserSession

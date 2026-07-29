@@ -164,11 +164,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
-    openDevToolsInHost: (tabId, hostWebContentsId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_IN_HOST_CHANNEL, {
-        tabId,
-        hostWebContentsId,
-      }),
+    openDevToolsDocked: (tabId, bounds) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_DOCKED_CHANNEL, { tabId, ...bounds }),
+    setDevToolsBounds: (tabId, bounds) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_DEVTOOLS_BOUNDS_CHANNEL, { tabId, ...bounds }),
     closeDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CLOSE_DEVTOOLS_CHANNEL, { tabId }),
     clearCookies: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL),
