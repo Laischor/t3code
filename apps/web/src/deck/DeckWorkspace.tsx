@@ -232,7 +232,8 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
 
   // Depth-first order puts the top-left pane first: the only one the macOS
   // traffic lights can reach once the sidebar is collapsed.
-  const firstPaneId = useMemo(() => paneLeaves(paneState.root)[0]?.id ?? null, [paneState.root]);
+  const leaves = useMemo(() => paneLeaves(paneState.root), [paneState.root]);
+  const firstPaneId = leaves[0]?.id ?? null;
 
   const renderPane = useCallback(
     (leaf: DeckPaneLeaf, isActive: boolean) => (
@@ -280,6 +281,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
             onActivatePane={activatePane}
             onResizeSplit={resizeSplit}
             renderPane={renderPane}
+            hideActiveBorder={leaves.length <= 1}
           />
         ) : (
           <PaneMessage>Opening terminal…</PaneMessage>

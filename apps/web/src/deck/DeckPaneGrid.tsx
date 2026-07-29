@@ -31,6 +31,8 @@ export interface DeckPaneGridProps {
   onActivatePane: (paneId: string) => void;
   onResizeSplit: (splitId: string, sizes: ReadonlyArray<number>) => void;
   renderPane: (leaf: DeckPaneLeaf, isActive: boolean) => ReactNode;
+  /** With a single pane there is nothing to distinguish, so skip the highlight. */
+  hideActiveBorder?: boolean;
 }
 
 export function DeckPaneGrid(props: DeckPaneGridProps) {
@@ -46,8 +48,10 @@ function PaneSlot({
   activePaneId,
   onActivatePane,
   renderPane,
+  hideActiveBorder,
 }: DeckPaneGridProps & { leaf: DeckPaneLeaf }) {
   const isActive = activePaneId === leaf.id;
+  const showActive = isActive && !hideActiveBorder;
   return (
     <div
       // Capture phase so a click anywhere inside the pane focuses it, including
@@ -57,7 +61,7 @@ function PaneSlot({
       }}
       className={cn(
         "relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[6px] border",
-        isActive ? "border-primary/60" : "border-border/60",
+        showActive ? "border-primary/60" : "border-border/60",
       )}
       data-deck-pane={leaf.id}
       data-deck-pane-active={isActive ? "true" : undefined}
