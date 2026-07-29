@@ -129,14 +129,20 @@ export default defineConfig(() => {
     plugins: [
       tanstackRouter(),
       react(),
-      babel({
-        // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
-        // This is because the babel plugin only automatically parses typescript and jsx based on relative paths (e.g. "**/*.ts")
-        // whereas the previous version of the plugin parsed all files with a .ts extension.
-        // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
-        parserOpts: { plugins: ["typescript", "jsx"] },
-        presets: [reactCompilerPreset()],
-      }),
+      // React Compiler babel is disabled for Deck builds on memory-constrained hosts
+      // (OOM/Killed during transform). Re-enable for release builds on a bigger machine.
+      ...(process.env.T3CODE_WEB_REACT_COMPILER === "0"
+        ? []
+        : [
+            babel({
+              // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
+              // This is because the babel plugin only automatically parses typescript and jsx based on relative paths (e.g. "**/*.ts")
+              // whereas the previous version of the plugin parsed all files with a .ts extension.
+              // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
+              parserOpts: { plugins: ["typescript", "jsx"] },
+              presets: [reactCompilerPreset()],
+            }),
+          ]),
       tailwindcss(),
     ],
     optimizeDeps: {
