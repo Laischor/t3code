@@ -11,14 +11,30 @@ import {
   paneLeaves,
   setSplitSizes,
   splitPane,
+  addTab,
+  activeTab,
+  closeTab,
+  findPaneForTab,
+  findTab,
+  paneTabs,
+  setActiveTab,
+  updateTab,
   type DeckPaneLeaf,
   type DeckPaneNode,
+  type DeckTab,
+  type DeckTabKind,
 } from "./paneTree";
 
-function leaf(id: string, kind: DeckPaneLeaf["kind"] = "terminal"): DeckPaneLeaf {
+function tab(id: string, kind: DeckTabKind = "terminal"): DeckTab {
   return kind === "terminal"
-    ? { type: "leaf", id, kind, terminalId: `${id}-session` }
-    : { type: "leaf", id, kind, tabId: null };
+    ? { id, kind, terminalId: `${id}-session` }
+    : { id, kind, previewTabId: null };
+}
+
+/** A pane holding one tab, named `<id>-tab`. */
+function leaf(id: string, kind: DeckTabKind = "terminal"): DeckPaneLeaf {
+  const only = tab(`${id}-tab`, kind);
+  return { type: "leaf", id, tabs: [only], activeTabId: only.id };
 }
 
 function splitIds(): () => string {
@@ -192,17 +208,39 @@ describe("normalizePaneTree", () => {
   it("rejects malformed nodes", () => {
     expect(normalizePaneTree(null)).toBeNull();
     expect(normalizePaneTree({ type: "leaf", id: "a" })).toBeNull();
-    expect(normalizePaneTree({ type: "leaf", id: "", kind: "terminal" })).toBeNull();
+    expect(normalizePaneTree({ type: "leaf", id: "", tabs: [tab("t1")] })).toBeNull();
     expect(normalizePaneTree({ type: "split", id: "s", direction: "sideways" })).toBeNull();
   });
 
-  it("keeps a valid leaf and defaults a browser tab id", () => {
-    expect(normalizePaneTree({ type: "leaf", id: "a", kind: "browser" })).toEqual({
+  it("keeps a valid leaf and defaults a browser preview id", () => {
+    expect(
+      normalizePaneTree({
+        type: "leaf",
+        id: "a",
+        tabs: [{ id: "a-tab", kind: "browser" }],
+        activeTabId: "a-tab",
+      }),
+    ).toEqual({
       type: "leaf",
       id: "a",
-      kind: "browser",
-      tabId: null,
+      tabs: [{ id: "a-tab", kind: "browser", previewTabId: null }],
+      activeTabId: "a-tab",
     });
+  });
+
+  it("drops a leaf whose tabs are all unusable", () => {
+    expect(normalizePaneTree({ type: "leaf", id: "a", tabs: [{ id: "x" }] })).toBeNull();
+    expect(normalizePaneTree({ type: "leaf", id: "a", tabs: [] })).toBeNull();
+  });
+
+  it("falls back to the first tab when activeTabId is stale", () => {
+    const normalized = normalizePaneTree({
+      type: "leaf",
+      id: "a",
+      tabs: [tab("t1"), tab("t2")],
+      activeTabId: "gone",
+    });
+    expect(normalized && !isSplit(normalized) ? normalized.activeTabId : null).toBe("t1");
   });
 
   it("drops duplicate ids", () => {
@@ -222,7 +260,7 @@ describe("normalizePaneTree", () => {
       id: "s1",
       direction: "horizontal",
       sizes: [0.5, 0.5],
-      children: [leaf("a"), { type: "leaf", id: "b" }],
+      children: [leaf("a"), { type: "leaf", id: "b", tabs: [] }],
     });
     expect(normalized).toEqual(leaf("a"));
   });
@@ -257,5 +295,84 @@ describe("lookups", () => {
     expect(findLeaf(root, null)).toBeNull();
     expect(findParentSplit(root, "c")?.direction).toBe("vertical");
     expect(findParentSplit(root, root.id)).toBeNull();
+  });
+});
+
+describe("tabs", () => {
+  it("appends a tab and focuses it", () => {
+    const root = addTab(leaf("a"), "a", tab("extra"));
+    const pane = findLeaf(root, "a");
+    expect(pane?.tabs.map((t) => t.id)).toEqual(["a-tab", "extra"]);
+    expect(pane?.activeTabId).toBe("extra");
+  });
+
+  it("lists tabs across panes in pane order", () => {
+    const root = splitPane(leaf("a"), "a", "horizontal", leaf("b"), splitIds());
+    expect(paneTabs(root).map((t) => t.id)).toEqual(["a-tab", "b-tab"]);
+  });
+
+  it("finds a tab and the pane holding it", () => {
+    const root = addTab(leaf("a"), "a", tab("extra"));
+    expect(findTab(root, "extra")?.id).toBe("extra");
+    expect(findPaneForTab(root, "extra")?.id).toBe("a");
+    expect(findTab(root, "missing")).toBeNull();
+  });
+
+  it("closing a middle tab focuses the one that slid into place", () => {
+    let root: DeckPaneNode | null = leaf("a");
+    root = addTab(root, "a", tab("t2"));
+    root = addTab(root, "a", tab("t3"));
+    root = setActiveTab(root, "a", "t2");
+
+    root = closeTab(root, "t2");
+    const pane = findLeaf(root, "a");
+    expect(pane?.tabs.map((t) => t.id)).toEqual(["a-tab", "t3"]);
+    expect(pane?.activeTabId).toBe("t3");
+  });
+
+  it("closing the last tab focuses the new last one", () => {
+    let root: DeckPaneNode | null = leaf("a");
+    root = addTab(root, "a", tab("t2"));
+    root = closeTab(root, "t2");
+    expect(findLeaf(root, "a")?.activeTabId).toBe("a-tab");
+  });
+
+  it("closing a tab other than the active one keeps focus", () => {
+    let root: DeckPaneNode | null = leaf("a");
+    root = addTab(root, "a", tab("t2"));
+    root = setActiveTab(root, "a", "t2");
+    root = closeTab(root, "a-tab");
+    expect(findLeaf(root, "a")?.activeTabId).toBe("t2");
+  });
+
+  it("closing the only tab in a pane closes the pane", () => {
+    const root = splitPane(leaf("a"), "a", "horizontal", leaf("b"), splitIds());
+    const closed = closeTab(root, "b-tab");
+    expect(closed).toEqual(leaf("a"));
+  });
+
+  it("closing the only tab of the only pane empties the tree", () => {
+    expect(closeTab(leaf("a"), "a-tab")).toBeNull();
+  });
+
+  it("ignores an unknown tab", () => {
+    const root = leaf("a");
+    expect(closeTab(root, "missing")).toBe(root);
+    expect(setActiveTab(root, "a", "missing")).toBe(root);
+  });
+
+  it("activeTab falls back to the first tab when the id is stale", () => {
+    const pane: DeckPaneLeaf = { type: "leaf", id: "a", tabs: [tab("t1")], activeTabId: "gone" };
+    expect(activeTab(pane)?.id).toBe("t1");
+  });
+
+  it("updates a tab in place", () => {
+    const root = updateTab(leaf("a", "browser"), "a-tab", (t) => ({ ...t, previewTabId: "srv-1" }));
+    expect(findTab(root, "a-tab")?.previewTabId).toBe("srv-1");
+  });
+
+  it("returns the same tree when an update changes nothing", () => {
+    const root = leaf("a");
+    expect(updateTab(root, "a-tab", (t) => t)).toBe(root);
   });
 });

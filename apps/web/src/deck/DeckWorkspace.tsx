@@ -1,10 +1,10 @@
 /**
- * Deck's main surface: a split grid of terminal and browser panes in place of
- * the chat view.
+ * Deck's main surface: a split grid of panes, each holding a stack of terminal
+ * and browser tabs, in place of the chat view.
  *
- * Both pane kinds are T3's own — terminals attach through the environment's
+ * Both tab kinds are T3's own — terminals attach through the environment's
  * terminal RPC (so SSH/WSL/cloud environments work, not just local), and
- * browser panes are the desktop preview surface. Deck contributes the layout.
+ * browser tabs are the desktop preview surface. Deck contributes the layout.
  */
 
 import { useAtomValue } from "@effect/atom-react";
@@ -16,9 +16,19 @@ import {
   PlusIcon,
   SquareSplitHorizontal,
   SquareSplitVertical,
+  TerminalSquare,
   XIcon,
 } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { openPreviewSession } from "~/components/preview/openPreviewSession";
 import { TerminalViewport } from "~/components/TerminalViewport";
@@ -29,12 +39,14 @@ import { primaryServerKeybindingsAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DeckDevToolsPane } from "./DeckDevToolsPane";
 import { DeckPaneGrid } from "./DeckPaneGrid";
+import { createPaneLeaf, createTab, selectThreadPaneState, useDeckStore } from "./deckStore";
 import {
-  createPaneLeaf,
-  selectThreadPaneState,
-  useDeckStore,
-} from "./deckStore";
-import { paneLeaves, type DeckPaneLeaf, type DeckSplitDirection } from "./paneTree";
+  activeTab,
+  paneTabs,
+  type DeckPaneLeaf,
+  type DeckSplitDirection,
+  type DeckTab,
+} from "./paneTree";
 
 // Lazily loaded exactly like ChatView does, so the preview surface stays in its
 // own chunk instead of being pulled into the main bundle.
@@ -62,11 +74,12 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const [focusRequestId, setFocusRequestId] = useState(0);
 
-  const leaves = useMemo(() => paneLeaves(paneState.root), [paneState.root]);
   const usedTerminalIds = useMemo(
     () =>
-      leaves.flatMap((leaf) => (leaf.kind === "terminal" && leaf.terminalId ? [leaf.terminalId] : [])),
-    [leaves],
+      paneTabs(paneState.root).flatMap((tab) =>
+        tab.kind === "terminal" && tab.terminalId ? [tab.terminalId] : [],
+      ),
+    [paneState.root],
   );
 
   // Seed the thread with a single terminal the first time it is opened.
@@ -83,40 +96,61 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       .getState()
       .ensureRootPane(
         threadRef,
-        createPaneLeaf({ kind: "terminal", terminalId: nextTerminalId([]) }),
+        createPaneLeaf(createTab({ kind: "terminal", terminalId: nextTerminalId([]) })),
       );
   }, [paneState.root, threadRef]);
 
-  const addTerminalPane = useCallback(
+  const targetPaneId = paneState.activePaneId;
+
+  /** Opens a preview session and writes its id back onto the tab. */
+  const openBrowserSession = useCallback(
+    async (tab: DeckTab) => {
+      const result = await openPreviewSession({ openPreview, threadRef });
+      if (result._tag === "Failure") return;
+      useDeckStore
+        .getState()
+        .attachTabSession(threadRef, tab.id, { previewTabId: result.value.tabId });
+    },
+    [openPreview, threadRef],
+  );
+
+  const addTab = useCallback(
+    (kind: DeckTab["kind"], paneId?: string) => {
+      const pane = paneId ?? targetPaneId;
+      if (!pane) return;
+      const tab =
+        kind === "terminal"
+          ? createTab({ kind, terminalId: nextTerminalId(usedTerminalIds) })
+          : createTab({ kind, previewTabId: null });
+      useDeckStore.getState().addTab(threadRef, pane, tab);
+      setFocusRequestId((value) => value + 1);
+      if (kind === "browser") void openBrowserSession(tab);
+    },
+    [openBrowserSession, targetPaneId, threadRef, usedTerminalIds],
+  );
+
+  const splitPane = useCallback(
     (direction: DeckSplitDirection) => {
-      const leaf = createPaneLeaf({
-        kind: "terminal",
-        terminalId: nextTerminalId(usedTerminalIds),
-      });
+      const leaf = createPaneLeaf(
+        createTab({ kind: "terminal", terminalId: nextTerminalId(usedTerminalIds) }),
+      );
       useDeckStore.getState().addPane(threadRef, leaf, direction);
       setFocusRequestId((value) => value + 1);
     },
     [threadRef, usedTerminalIds],
   );
 
-  const addBrowserPane = useCallback(
-    async (direction: DeckSplitDirection) => {
-      // The pane appears immediately; the tab id lands once the session opens.
-      const leaf = createPaneLeaf({ kind: "browser", tabId: null });
-      useDeckStore.getState().addPane(threadRef, leaf, direction);
-
-      const result = await openPreviewSession({ openPreview, threadRef });
-      if (result._tag === "Failure") return;
-      useDeckStore
-        .getState()
-        .attachPaneSession(threadRef, leaf.id, { tabId: result.value.tabId });
+  const closeTab = useCallback(
+    (tabId: string) => {
+      useDeckStore.getState().closeTab(threadRef, tabId);
     },
-    [openPreview, threadRef],
+    [threadRef],
   );
 
-  const closePane = useCallback(
-    (paneId: string) => {
-      useDeckStore.getState().closePane(threadRef, paneId);
+  const activateTab = useCallback(
+    (paneId: string, tabId: string) => {
+      useDeckStore.getState().setActiveTab(threadRef, paneId, tabId);
+      setFocusRequestId((value) => value + 1);
     },
     [threadRef],
   );
@@ -137,33 +171,42 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   );
 
   const renderPane = useCallback(
-    (leaf: DeckPaneLeaf, isActive: boolean) =>
-      leaf.kind === "terminal" ? (
-        <TerminalPane
-          leaf={leaf}
-          isActive={isActive}
-          threadRef={threadRef}
-          cwd={cwd}
-          {...(worktreePath !== undefined ? { worktreePath } : {})}
-          {...(runtimeEnv !== undefined ? { runtimeEnv } : {})}
-          keybindings={keybindings}
-          focusRequestId={focusRequestId}
-          onClose={() => closePane(leaf.id)}
-        />
-      ) : (
-        <BrowserPane leaf={leaf} threadRef={threadRef} onClose={() => closePane(leaf.id)} />
-      ),
-    [closePane, cwd, focusRequestId, keybindings, runtimeEnv, threadRef, worktreePath],
+    (leaf: DeckPaneLeaf, isActive: boolean) => (
+      <PaneTabs
+        leaf={leaf}
+        isActive={isActive}
+        threadRef={threadRef}
+        cwd={cwd}
+        {...(worktreePath !== undefined ? { worktreePath } : {})}
+        {...(runtimeEnv !== undefined ? { runtimeEnv } : {})}
+        keybindings={keybindings}
+        focusRequestId={focusRequestId}
+        onSelectTab={(tabId) => activateTab(leaf.id, tabId)}
+        onCloseTab={closeTab}
+        onAddTab={(kind) => addTab(kind, leaf.id)}
+      />
+    ),
+    [
+      activateTab,
+      addTab,
+      closeTab,
+      cwd,
+      focusRequestId,
+      keybindings,
+      runtimeEnv,
+      threadRef,
+      worktreePath,
+    ],
   );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1.5">
-        <Button size="sm" variant="ghost" onClick={() => addTerminalPane("vertical")}>
+        <Button size="sm" variant="ghost" onClick={() => addTab("terminal")}>
           <PlusIcon className="size-3.5" />
           Terminal
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => void addBrowserPane("horizontal")}>
+        <Button size="sm" variant="ghost" onClick={() => addTab("browser")}>
           <Globe className="size-3.5" />
           Browser
         </Button>
@@ -172,16 +215,11 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
           size="sm"
           variant="ghost"
           title="Split right"
-          onClick={() => addTerminalPane("horizontal")}
+          onClick={() => splitPane("horizontal")}
         >
           <SquareSplitHorizontal className="size-3.5" />
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          title="Split down"
-          onClick={() => addTerminalPane("vertical")}
-        >
+        <Button size="sm" variant="ghost" title="Split down" onClick={() => splitPane("vertical")}>
           <SquareSplitVertical className="size-3.5" />
         </Button>
         <span className="ml-auto truncate text-xs text-muted-foreground" title={cwd}>
@@ -206,7 +244,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   );
 }
 
-function PaneMessage({ children }: { children: React.ReactNode }) {
+function PaneMessage({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
       {children}
@@ -214,54 +252,11 @@ function PaneMessage({ children }: { children: React.ReactNode }) {
   );
 }
 
-function PaneHeader({
-  title,
-  isActive,
-  actions,
-  onClose,
-}: {
-  title: string;
-  isActive?: boolean;
-  actions?: React.ReactNode;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex h-7 shrink-0 items-center justify-between gap-2 border-b px-2 text-xs",
-        isActive ? "text-foreground" : "text-muted-foreground",
-      )}
-    >
-      <span className="truncate">{title}</span>
-      <div className="flex shrink-0 items-center gap-0.5">
-        {actions}
-        <button
-          type="button"
-          aria-label={`Close ${title}`}
-          className="rounded p-0.5 hover:bg-accent"
-          onClick={(event) => {
-            event.stopPropagation();
-            onClose();
-          }}
-        >
-          <XIcon className="size-3" />
-        </button>
-      </div>
-    </div>
-  );
+function tabTitle(tab: DeckTab): string {
+  return tab.kind === "terminal" ? getTerminalLabel(tab.terminalId ?? tab.id) : "Browser";
 }
 
-function TerminalPane({
-  leaf,
-  isActive,
-  threadRef,
-  cwd,
-  worktreePath,
-  runtimeEnv,
-  keybindings,
-  focusRequestId,
-  onClose,
-}: {
+interface PaneTabsProps {
   leaf: DeckPaneLeaf;
   isActive: boolean;
   threadRef: ScopedThreadRef;
@@ -270,45 +265,171 @@ function TerminalPane({
   runtimeEnv?: Record<string, string>;
   keybindings: React.ComponentProps<typeof TerminalViewport>["keybindings"];
   focusRequestId: number;
-  onClose: () => void;
-}) {
-  const terminalId = leaf.terminalId ?? leaf.id;
+  onSelectTab: (tabId: string) => void;
+  onCloseTab: (tabId: string) => void;
+  onAddTab: (kind: DeckTab["kind"]) => void;
+}
+
+function PaneTabs({
+  leaf,
+  isActive,
+  threadRef,
+  cwd,
+  worktreePath,
+  runtimeEnv,
+  keybindings,
+  focusRequestId,
+  onSelectTab,
+  onCloseTab,
+  onAddTab,
+}: PaneTabsProps) {
+  const current = activeTab(leaf);
+
   return (
     <>
-      <PaneHeader title={getTerminalLabel(terminalId)} isActive={isActive} onClose={onClose} />
-      <div className="min-h-0 flex-1">
-        <TerminalViewport
-          threadRef={threadRef}
-          threadId={threadRef.threadId}
-          terminalId={terminalId}
-          terminalLabel={getTerminalLabel(terminalId)}
-          cwd={cwd}
-          {...(worktreePath !== undefined ? { worktreePath } : {})}
-          {...(runtimeEnv !== undefined ? { runtimeEnv } : {})}
-          onSessionExited={onClose}
-          // Deck has no composer to attach terminal context to.
-          onAddTerminalContext={() => {}}
-          focusRequestId={focusRequestId}
-          autoFocus={isActive}
-          keybindings={keybindings}
-        />
+      <div
+        className={cn(
+          "flex h-7 shrink-0 items-stretch gap-px overflow-x-auto border-b text-xs",
+          isActive ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {leaf.tabs.map((tab) => {
+          const selected = tab.id === current?.id;
+          return (
+            <div
+              key={tab.id}
+              role="tab"
+              aria-selected={selected}
+              onPointerDown={() => onSelectTab(tab.id)}
+              className={cn(
+                "group flex min-w-0 shrink-0 cursor-default items-center gap-1 border-r px-2",
+                selected ? "bg-accent/60" : "hover:bg-accent/30",
+              )}
+            >
+              {tab.kind === "terminal" ? (
+                <TerminalSquare className="size-3 shrink-0 opacity-60" />
+              ) : (
+                <Globe className="size-3 shrink-0 opacity-60" />
+              )}
+              <span className="truncate">{tabTitle(tab)}</span>
+              <button
+                type="button"
+                aria-label={`Close ${tabTitle(tab)}`}
+                className="rounded p-0.5 opacity-0 hover:bg-accent group-hover:opacity-100"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCloseTab(tab.id);
+                }}
+              >
+                <XIcon className="size-3" />
+              </button>
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          aria-label="New terminal tab"
+          title="New terminal tab"
+          className="flex shrink-0 items-center px-2 hover:bg-accent/30"
+          onClick={(event) => {
+            event.stopPropagation();
+            onAddTab("terminal");
+          }}
+        >
+          <PlusIcon className="size-3" />
+        </button>
+      </div>
+
+      {/*
+        Every tab stays mounted and inactive ones are only hidden: unmounting a
+        terminal drops its scrollback and xterm state, and unmounting a
+        <webview> tears down the page entirely. `invisible` rather than
+        `hidden` so panes keep their measured size and terminals do not have to
+        refit on every switch.
+      */}
+      <div className="relative min-h-0 flex-1">
+        {leaf.tabs.map((tab) => {
+          const selected = tab.id === current?.id;
+          return (
+            <div
+              key={tab.id}
+              className={cn(
+                "absolute inset-0 flex min-h-0 flex-col",
+                selected ? "" : "invisible pointer-events-none",
+              )}
+            >
+              {tab.kind === "terminal" ? (
+                <TerminalTab
+                  tab={tab}
+                  isActive={isActive && selected}
+                  threadRef={threadRef}
+                  cwd={cwd}
+                  {...(worktreePath !== undefined ? { worktreePath } : {})}
+                  {...(runtimeEnv !== undefined ? { runtimeEnv } : {})}
+                  keybindings={keybindings}
+                  focusRequestId={focusRequestId}
+                  onExited={() => onCloseTab(tab.id)}
+                />
+              ) : (
+                <BrowserTab tab={tab} threadRef={threadRef} />
+              )}
+            </div>
+          );
+        })}
       </div>
     </>
   );
 }
 
-function BrowserPane({
-  leaf,
+function TerminalTab({
+  tab,
+  isActive,
   threadRef,
-  onClose,
+  cwd,
+  worktreePath,
+  runtimeEnv,
+  keybindings,
+  focusRequestId,
+  onExited,
 }: {
-  leaf: DeckPaneLeaf;
+  tab: DeckTab;
+  isActive: boolean;
   threadRef: ScopedThreadRef;
-  onClose: () => void;
+  cwd: string;
+  worktreePath?: string | null;
+  runtimeEnv?: Record<string, string>;
+  keybindings: React.ComponentProps<typeof TerminalViewport>["keybindings"];
+  focusRequestId: number;
+  onExited: () => void;
 }) {
+  const terminalId = tab.terminalId ?? tab.id;
+  return (
+    <div className="min-h-0 flex-1">
+      <TerminalViewport
+        threadRef={threadRef}
+        threadId={threadRef.threadId}
+        terminalId={terminalId}
+        terminalLabel={getTerminalLabel(terminalId)}
+        cwd={cwd}
+        {...(worktreePath !== undefined ? { worktreePath } : {})}
+        {...(runtimeEnv !== undefined ? { runtimeEnv } : {})}
+        onSessionExited={onExited}
+        // Deck has no composer to attach terminal context to.
+        onAddTerminalContext={() => {}}
+        focusRequestId={focusRequestId}
+        autoFocus={isActive}
+        keybindings={keybindings}
+      />
+    </div>
+  );
+}
+
+function BrowserTab({ tab, threadRef }: { tab: DeckTab; threadRef: ScopedThreadRef }) {
   const [devToolsHeight, setDevToolsHeight] = useState(0);
   const bodyRef = useRef<HTMLDivElement>(null);
   const devToolsOpen = devToolsHeight > 0;
+  const previewTabId = tab.previewTabId ?? null;
 
   const devToolsHeightRef = useRef(devToolsHeight);
   useEffect(() => {
@@ -341,54 +462,49 @@ function BrowserPane({
   }, []);
 
   return (
-    <>
-      <PaneHeader
-        title="Browser"
-        onClose={onClose}
-        actions={
-          leaf.tabId ? (
-            <button
-              type="button"
-              aria-label={devToolsOpen ? "Hide DevTools" : "Show DevTools"}
-              aria-pressed={devToolsOpen}
-              title={devToolsOpen ? "Hide DevTools" : "Show DevTools"}
-              className={cn("rounded p-0.5 hover:bg-accent", devToolsOpen && "bg-accent")}
-              onClick={(event) => {
-                event.stopPropagation();
-                setDevToolsHeight(devToolsOpen ? 0 : DEVTOOLS_DEFAULT_HEIGHT);
-              }}
-            >
-              <Code2 className="size-3" />
-            </button>
-          ) : null
-        }
-      />
-      <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1">
-          {leaf.tabId ? (
-            <Suspense fallback={<PaneMessage>Loading browser…</PaneMessage>}>
-              <PreviewPanel mode="embedded" threadRef={threadRef} tabId={leaf.tabId} visible />
-            </Suspense>
-          ) : (
-            <PaneMessage>Opening browser…</PaneMessage>
-          )}
-        </div>
-        {leaf.tabId && devToolsOpen ? (
-          <>
-            <div
-              role="separator"
-              aria-orientation="horizontal"
-              onPointerDown={startDevToolsDrag}
-              className="group flex h-1.5 shrink-0 cursor-row-resize items-center justify-center"
-            >
-              <div className="h-[2px] w-8 rounded-full bg-border/70 group-hover:bg-primary/60" />
-            </div>
-            <div className="shrink-0 border-t" style={{ height: devToolsHeight }}>
-              <DeckDevToolsPane tabId={leaf.tabId} />
-            </div>
-          </>
-        ) : null}
+    <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1">
+        {previewTabId ? (
+          <Suspense fallback={<PaneMessage>Loading browser…</PaneMessage>}>
+            <PreviewPanel mode="embedded" threadRef={threadRef} tabId={previewTabId} visible />
+          </Suspense>
+        ) : (
+          <PaneMessage>Opening browser…</PaneMessage>
+        )}
       </div>
-    </>
+      {previewTabId ? (
+        <>
+          {devToolsOpen ? (
+            <>
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                onPointerDown={startDevToolsDrag}
+                className="group flex h-1.5 shrink-0 cursor-row-resize items-center justify-center"
+              >
+                <div className="h-[2px] w-8 rounded-full bg-border/70 group-hover:bg-primary/60" />
+              </div>
+              <div className="shrink-0 border-t" style={{ height: devToolsHeight }}>
+                <DeckDevToolsPane tabId={previewTabId} />
+              </div>
+            </>
+          ) : null}
+          <button
+            type="button"
+            aria-label={devToolsOpen ? "Hide DevTools" : "Show DevTools"}
+            aria-pressed={devToolsOpen}
+            title={devToolsOpen ? "Hide DevTools" : "Show DevTools"}
+            className={cn(
+              "flex h-5 shrink-0 items-center justify-center gap-1 border-t text-[10px] text-muted-foreground hover:bg-accent",
+              devToolsOpen && "bg-accent/60",
+            )}
+            onClick={() => setDevToolsHeight(devToolsOpen ? 0 : DEVTOOLS_DEFAULT_HEIGHT)}
+          >
+            <Code2 className="size-3" />
+            DevTools
+          </button>
+        </>
+      ) : null}
+    </div>
   );
 }

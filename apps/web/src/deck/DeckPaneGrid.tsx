@@ -60,7 +60,6 @@ function PaneSlot({
         isActive ? "border-primary/60" : "border-border/60",
       )}
       data-deck-pane={leaf.id}
-      data-deck-pane-kind={leaf.kind}
       data-deck-pane-active={isActive ? "true" : undefined}
     >
       {renderPane(leaf, isActive)}
@@ -76,9 +75,7 @@ function SplitSlot({ split, ...props }: DeckPaneGridProps & { split: DeckPaneSpl
 
   // `<fraction>fr` per child with fixed divider tracks between them, so the
   // dividers never eat into the fractions.
-  const template = sizes
-    .map((size) => `${size}fr`)
-    .join(` ${DIVIDER_SIZE}px `);
+  const template = sizes.map((size) => `${size}fr`).join(` ${DIVIDER_SIZE}px `);
 
   const handleDividerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>, index: number) => {

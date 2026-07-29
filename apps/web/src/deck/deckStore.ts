@@ -13,21 +13,26 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "../lib/storage";
 import {
+  addTab,
   closePane,
+  closeTab,
   findLeaf,
-  isLeaf,
+  findPaneForTab,
   nextActivePaneId,
   normalizePaneTree,
   paneLeaves,
+  setActiveTab,
   setSplitSizes,
   splitPane,
-  type DeckPaneKind,
+  updateTab,
   type DeckPaneLeaf,
   type DeckPaneNode,
   type DeckSplitDirection,
+  type DeckTab,
+  type DeckTabKind,
 } from "./paneTree";
 
-const DECK_PANE_STORAGE_KEY = "deck:panes:v1";
+const DECK_PANE_STORAGE_KEY = "deck:panes:v2";
 
 export interface ThreadDeckState {
   readonly root: DeckPaneNode | null;
@@ -88,7 +93,7 @@ export function selectThreadPaneState(
 }
 
 export function selectActivePaneLeaf(state: ThreadDeckState): DeckPaneLeaf | null {
-  return findLeaf(state.root, state.activePaneId) ?? (paneLeaves(state.root)[0] ?? null);
+  return findLeaf(state.root, state.activePaneId) ?? paneLeaves(state.root)[0] ?? null;
 }
 
 function updatePaneStateByThreadKey(
@@ -120,19 +125,28 @@ function createPaneId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${paneIdCounter.toString(36)}`;
 }
 
-export function createPaneLeaf(input: {
-  readonly kind: DeckPaneKind;
+export function createTab(input: {
+  readonly kind: DeckTabKind;
   readonly terminalId?: string;
-  readonly tabId?: string | null;
-}): DeckPaneLeaf {
+  readonly previewTabId?: string | null;
+}): DeckTab {
   return {
-    type: "leaf",
     id: createPaneId(input.kind === "terminal" ? "term" : "web"),
     kind: input.kind,
     ...(input.kind === "terminal" && input.terminalId !== undefined
       ? { terminalId: input.terminalId }
       : {}),
-    ...(input.kind === "browser" ? { tabId: input.tabId ?? null } : {}),
+    ...(input.kind === "browser" ? { previewTabId: input.previewTabId ?? null } : {}),
+  };
+}
+
+/** A pane holding a single tab — the shape every new pane starts in. */
+export function createPaneLeaf(tab: DeckTab): DeckPaneLeaf {
+  return {
+    type: "leaf",
+    id: createPaneId("pane"),
+    tabs: [tab],
+    activeTabId: tab.id,
   };
 }
 
@@ -154,11 +168,16 @@ interface DeckStoreState {
     splitId: string,
     sizes: ReadonlyArray<number>,
   ) => void;
-  /** Attaches the backing session id once the terminal/preview has opened. */
-  attachPaneSession: (
+  /** Adds a tab to a pane and focuses it. */
+  addTab: (threadRef: ScopedThreadRef, paneId: string, tab: DeckTab) => void;
+  /** Closes a tab; closing the last one closes its pane. */
+  closeTab: (threadRef: ScopedThreadRef, tabId: string) => void;
+  setActiveTab: (threadRef: ScopedThreadRef, paneId: string, tabId: string) => void;
+  /** Attaches the backing session id once the preview session has opened. */
+  attachTabSession: (
     threadRef: ScopedThreadRef,
-    paneId: string,
-    session: { readonly terminalId?: string; readonly tabId?: string | null },
+    tabId: string,
+    session: { readonly terminalId?: string; readonly previewTabId?: string | null },
   ) => void;
   clearPaneState: (threadRef: ScopedThreadRef) => void;
   removeOrphanedPaneStates: (activeThreadKeys: Set<string>) => void;
@@ -172,11 +191,7 @@ export const useDeckStore = create<DeckStoreState>()(
         updater: (state: ThreadDeckState) => ThreadDeckState,
       ) => {
         set((state) => {
-          const next = updatePaneStateByThreadKey(
-            state.paneStateByThreadKey,
-            threadRef,
-            updater,
-          );
+          const next = updatePaneStateByThreadKey(state.paneStateByThreadKey, threadRef, updater);
           return next === state.paneStateByThreadKey ? state : { paneStateByThreadKey: next };
         });
       };
@@ -221,23 +236,51 @@ export const useDeckStore = create<DeckStoreState>()(
             return root === state.root ? state : { ...state, root };
           }),
 
-        attachPaneSession: (threadRef, paneId, session) =>
+        addTab: (threadRef, paneId, tab) =>
           update(threadRef, (state) => {
-            const leaf = findLeaf(state.root, paneId);
-            if (!leaf) return state;
-            const next: DeckPaneLeaf = {
-              ...leaf,
-              ...(session.terminalId !== undefined ? { terminalId: session.terminalId } : {}),
-              ...(session.tabId !== undefined ? { tabId: session.tabId } : {}),
-            };
-            if (next.terminalId === leaf.terminalId && next.tabId === leaf.tabId) {
-              return state;
-            }
-            return { ...state, root: replaceLeaf(state.root, paneId, next) };
+            const root = addTab(state.root, paneId, tab);
+            return root === state.root ? state : { ...state, root, activePaneId: paneId };
           }),
 
-        clearPaneState: (threadRef) =>
-          update(threadRef, () => DEFAULT_THREAD_DECK_STATE),
+        closeTab: (threadRef, tabId) =>
+          update(threadRef, (state) => {
+            const pane = findPaneForTab(state.root, tabId);
+            if (!pane) return state;
+            const root = closeTab(state.root, tabId);
+            if (root === state.root) return state;
+            // Closing the last tab removes the pane, so the focus may need to move.
+            return {
+              root,
+              activePaneId: findLeaf(root, state.activePaneId)
+                ? state.activePaneId
+                : nextActivePaneId(state.root, root, pane.id, state.activePaneId),
+            };
+          }),
+
+        setActiveTab: (threadRef, paneId, tabId) =>
+          update(threadRef, (state) => {
+            const root = setActiveTab(state.root, paneId, tabId);
+            return root === state.root ? state : { ...state, root, activePaneId: paneId };
+          }),
+
+        attachTabSession: (threadRef, tabId, session) =>
+          update(threadRef, (state) => {
+            const root = updateTab(state.root, tabId, (tab) => {
+              const next: DeckTab = {
+                ...tab,
+                ...(session.terminalId !== undefined ? { terminalId: session.terminalId } : {}),
+                ...(session.previewTabId !== undefined
+                  ? { previewTabId: session.previewTabId }
+                  : {}),
+              };
+              return next.terminalId === tab.terminalId && next.previewTabId === tab.previewTabId
+                ? tab
+                : next;
+            });
+            return root === state.root ? state : { ...state, root };
+          }),
+
+        clearPaneState: (threadRef) => update(threadRef, () => DEFAULT_THREAD_DECK_STATE),
 
         removeOrphanedPaneStates: (activeThreadKeys) =>
           set((state) => {
@@ -255,7 +298,7 @@ export const useDeckStore = create<DeckStoreState>()(
     },
     {
       name: DECK_PANE_STORAGE_KEY,
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
@@ -264,20 +307,3 @@ export const useDeckStore = create<DeckStoreState>()(
     },
   ),
 );
-
-function replaceLeaf(
-  node: DeckPaneNode | null,
-  paneId: string,
-  next: DeckPaneLeaf,
-): DeckPaneNode | null {
-  if (!node) return null;
-  if (node.id === paneId) return next;
-  if (isLeaf(node)) return node;
-  let changed = false;
-  const children = node.children.map((child) => {
-    const replaced = replaceLeaf(child, paneId, next);
-    if (replaced && replaced !== child) changed = true;
-    return replaced ?? child;
-  });
-  return changed ? { ...node, children } : node;
-}
