@@ -25,6 +25,7 @@ import type {
   PreviewAutomationStatus,
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
+  DesktopPreviewDevToolsDockResult,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
@@ -1782,18 +1783,33 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     // DevTools hold the debugger, which is the same channel the automation
     // control session uses; restore it once they close.
     yield* detachControlSession(wc.id);
-    yield* attempt({ operation: "openDevToolsDocked", tabId, webContentsId: wc.id }, () => {
-      const view = new WebContentsView();
-      devToolsViews.set(tabId, view);
-      window.contentView.addChildView(view);
-      view.setBounds(bounds);
-      wc.once("devtools-closed", () => {
-        destroyDevToolsView(tabId);
-        if (!wc.isDestroyed()) runFork(restoreControlSession(tabId, wc));
-      });
-      wc.setDevToolsWebContents(view.webContents);
-      wc.openDevTools();
-    });
+    const view = yield* attempt(
+      { operation: "openDevToolsDocked", tabId, webContentsId: wc.id },
+      () => {
+        const created = new WebContentsView();
+        devToolsViews.set(tabId, created);
+        window.contentView.addChildView(created);
+        created.setBounds(bounds);
+        wc.once("devtools-closed", () => {
+          destroyDevToolsView(tabId);
+          if (!wc.isDestroyed()) runFork(restoreControlSession(tabId, wc));
+        });
+        wc.setDevToolsWebContents(created.webContents);
+        wc.openDevTools();
+        return created;
+      },
+    );
+
+    const rect = (value: { x: number; y: number; width: number; height: number }) =>
+      `${value.x},${value.y} ${value.width}x${value.height}`;
+    const content = window.getContentBounds();
+    return {
+      devToolsOpened: wc.isDevToolsOpened(),
+      requestedBounds: rect(bounds),
+      actualBounds: view.webContents.isDestroyed() ? "destroyed" : rect(view.getBounds()),
+      windowContentBounds: rect(content),
+      devToolsUrl: view.webContents.isDestroyed() ? null : view.webContents.getURL(),
+    };
   });
 
   const setDevToolsBounds = Effect.fn("PreviewManager.setDevToolsBounds")(function* (
@@ -3637,7 +3653,7 @@ export class PreviewManager extends Context.Service<
     readonly openDevToolsDocked: (
       tabId: string,
       bounds: { x: number; y: number; width: number; height: number },
-    ) => Effect.Effect<void, PreviewManagerError>;
+    ) => Effect.Effect<DesktopPreviewDevToolsDockResult, PreviewManagerError>;
     readonly setDevToolsBounds: (
       tabId: string,
       bounds: { x: number; y: number; width: number; height: number },
