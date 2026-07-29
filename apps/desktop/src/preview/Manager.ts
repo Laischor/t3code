@@ -28,6 +28,9 @@ import type {
   DesktopPreviewDevToolsDockResult,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+/** How long to wait for DevTools to report themselves open before reporting. */
+const DEVTOOLS_OPEN_SETTLE_MS = 750;
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import {
   BrowserWindow,
@@ -1738,9 +1741,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
    * Electron requires the host WebContents to be navigation-free and leaves its
    * destruction to the caller, so the renderer owns the host webview's life.
    */
-  const destroyDevToolsView = (tabId: string) => {
+  /**
+   * `expected` guards against a stale devtools-closed listener: re-opening
+   * registers a new view, and the previous session's close event must not tear
+   * that one down.
+   */
+  const destroyDevToolsView = (tabId: string, expected?: WebContentsView) => {
     const view = devToolsViews.get(tabId);
-    if (!view) return;
+    if (!view || (expected && view !== expected)) return;
     devToolsViews.delete(tabId);
     const window = view.webContents.isDestroyed()
       ? null
@@ -1791,13 +1799,32 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         window.contentView.addChildView(created);
         created.setBounds(bounds);
         wc.once("devtools-closed", () => {
-          destroyDevToolsView(tabId);
+          destroyDevToolsView(tabId, created);
           if (!wc.isDestroyed()) runFork(restoreControlSession(tabId, wc));
         });
         wc.setDevToolsWebContents(created.webContents);
         wc.openDevTools();
         return created;
       },
+    );
+
+    // DevTools open asynchronously, so sampling right after openDevTools()
+    // would always report "not open".
+    yield* Effect.promise(
+      () =>
+        new Promise<void>((resolve) => {
+          if (wc.isDevToolsOpened() || wc.isDestroyed()) {
+            resolve();
+            return;
+          }
+          const timer = setTimeout(finish, DEVTOOLS_OPEN_SETTLE_MS);
+          function finish() {
+            clearTimeout(timer);
+            wc.off("devtools-opened", finish);
+            resolve();
+          }
+          wc.once("devtools-opened", finish);
+        }),
     );
 
     const rect = (value: { x: number; y: number; width: number; height: number }) =>
