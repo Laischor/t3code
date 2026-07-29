@@ -504,7 +504,7 @@ function BrowserTab({
                 <div className="h-[2px] w-8 rounded-full bg-border/70 group-hover:bg-primary/60" />
               </div>
               <div className="shrink-0 border-t" style={{ height: devToolsHeight }}>
-                <DeckDevToolsSlot tabId={previewTabId} visible={visible} />
+                <DeckDevToolsSlot threadRef={threadRef} tabId={previewTabId} visible={visible} />
               </div>
             </>
           ) : null}

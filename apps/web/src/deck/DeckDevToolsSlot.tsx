@@ -10,16 +10,39 @@
  * lined up with the box the layout gives it.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
+import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
+import { useThreadPreviewState } from "~/previewStateStore";
+
+/** The preview webview registers itself asynchronously; wait it out. */
+const OPEN_RETRY_LIMIT = 10;
+const OPEN_RETRY_DELAY_MS = 250;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function DeckDevToolsSlot({ tabId, visible }: { tabId: string; visible: boolean }) {
+export function DeckDevToolsSlot({
+  threadRef,
+  tabId,
+  visible,
+}: {
+  threadRef: ScopedThreadRef;
+  /** Server-side preview tab id, as stored on the deck tab. */
+  tabId: string;
+  visible: boolean;
+}) {
   const slotRef = useRef<HTMLDivElement>(null);
+  // Desktop preview resources are keyed by runtime id, not the server id: the
+  // server only guarantees uniqueness within one process.
+  const previewState = useThreadPreviewState(threadRef);
+  const runtimeTabId = useMemo(
+    () => previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId),
+    [previewState.serverEpoch, tabId, threadRef],
+  );
   const [error, setError] = useState<string | null>(null);
   const openedRef = useRef(false);
   // Kept in a ref so toggling visibility parks the view instead of tearing the
@@ -51,6 +74,8 @@ export function DeckDevToolsSlot({ tabId, visible }: { tabId: string; visible: b
 
     let disposed = false;
     let frame = 0;
+    let retry = 0;
+    let retryTimer = 0;
 
     const sync = () => {
       if (disposed) return;
@@ -62,14 +87,21 @@ export function DeckDevToolsSlot({ tabId, visible }: { tabId: string; visible: b
       if (!openedRef.current) {
         if (bounds.width === 0 || bounds.height === 0) return;
         openedRef.current = true;
-        void bridge.openDevToolsDocked(tabId, target).catch((cause: unknown) => {
+        void bridge.openDevToolsDocked(runtimeTabId, target).catch((cause: unknown) => {
           if (disposed) return;
           openedRef.current = false;
+          // The tab is only known to the main process once its webview has
+          // registered, which can land after the slot renders.
+          if (retry < OPEN_RETRY_LIMIT) {
+            retry += 1;
+            retryTimer = window.setTimeout(sync, OPEN_RETRY_DELAY_MS);
+            return;
+          }
           setError(errorMessage(cause));
         });
         return;
       }
-      void bridge.setDevToolsBounds(tabId, target).catch(() => {
+      void bridge.setDevToolsBounds(runtimeTabId, target).catch(() => {
         // Bounds updates are best-effort; the next one corrects it.
       });
     };
@@ -91,16 +123,17 @@ export function DeckDevToolsSlot({ tabId, visible }: { tabId: string; visible: b
     return () => {
       disposed = true;
       syncRef.current = null;
+      window.clearTimeout(retryTimer);
       window.cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener("resize", scheduleSync);
       window.removeEventListener("scroll", scheduleSync, true);
       openedRef.current = false;
-      void bridge.closeDevTools(tabId).catch(() => {
+      void bridge.closeDevTools(runtimeTabId).catch(() => {
         // The slot is going away regardless.
       });
     };
-  }, [readBounds, tabId]);
+  }, [readBounds, runtimeTabId]);
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -108,10 +141,10 @@ export function DeckDevToolsSlot({ tabId, visible }: { tabId: string; visible: b
   }, [visible]);
 
   const openDetached = useCallback(() => {
-    void previewBridge?.openDevTools(tabId).catch((cause: unknown) => {
+    void previewBridge?.openDevTools(runtimeTabId).catch((cause: unknown) => {
       setError(errorMessage(cause));
     });
-  }, [tabId]);
+  }, [runtimeTabId]);
 
   return (
     <div ref={slotRef} className="relative h-full w-full bg-background">
