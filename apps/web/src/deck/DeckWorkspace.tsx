@@ -342,11 +342,11 @@ function PaneTabs({
       </div>
 
       {/*
-        Every tab stays mounted and inactive ones are only hidden: unmounting a
-        terminal drops its scrollback and xterm state, and unmounting a
-        <webview> tears down the page entirely. `invisible` rather than
-        `hidden` so panes keep their measured size and terminals do not have to
-        refit on every switch.
+        Every tab stays mounted; unmounting a terminal drops its scrollback and
+        xterm state, and unmounting a <webview> tears down the page entirely.
+        `invisible` rather than `hidden` so panes keep their measured size and
+        terminals do not have to refit on every switch. Browser tabs additionally
+        get an explicit `visible` flag, because CSS does not hide their guest.
       */}
       <div className="relative min-h-0 flex-1">
         {leaf.tabs.map((tab) => {
@@ -372,7 +372,7 @@ function PaneTabs({
                   onExited={() => onCloseTab(tab.id)}
                 />
               ) : (
-                <BrowserTab tab={tab} threadRef={threadRef} />
+                <BrowserTab tab={tab} threadRef={threadRef} visible={selected} />
               )}
             </div>
           );
@@ -425,7 +425,20 @@ function TerminalTab({
   );
 }
 
-function BrowserTab({ tab, threadRef }: { tab: DeckTab; threadRef: ScopedThreadRef }) {
+function BrowserTab({
+  tab,
+  threadRef,
+  visible,
+}: {
+  tab: DeckTab;
+  threadRef: ScopedThreadRef;
+  /**
+   * CSS cannot hide an Electron `<webview>` — the guest composites in its own
+   * layer, so `visibility: hidden` on an ancestor leaves it painted on top.
+   * T3 parks inactive surfaces off-screen instead, driven by this flag.
+   */
+  visible: boolean;
+}) {
   const [devToolsHeight, setDevToolsHeight] = useState(0);
   const bodyRef = useRef<HTMLDivElement>(null);
   const devToolsOpen = devToolsHeight > 0;
@@ -466,7 +479,12 @@ function BrowserTab({ tab, threadRef }: { tab: DeckTab; threadRef: ScopedThreadR
       <div className="min-h-0 flex-1">
         {previewTabId ? (
           <Suspense fallback={<PaneMessage>Loading browser…</PaneMessage>}>
-            <PreviewPanel mode="embedded" threadRef={threadRef} tabId={previewTabId} visible />
+            <PreviewPanel
+              mode="embedded"
+              threadRef={threadRef}
+              tabId={previewTabId}
+              visible={visible}
+            />
           </Suspense>
         ) : (
           <PaneMessage>Opening browser…</PaneMessage>
@@ -474,7 +492,13 @@ function BrowserTab({ tab, threadRef }: { tab: DeckTab; threadRef: ScopedThreadR
       </div>
       {previewTabId ? (
         <>
-          {devToolsOpen ? (
+          {/*
+            Unmounted rather than hidden while the tab is in the background:
+            the DevTools host is a <webview> too, so CSS would leave it painted
+            over whatever tab is actually in front. The height survives, so it
+            comes back the same size.
+          */}
+          {devToolsOpen && visible ? (
             <>
               <div
                 role="separator"
