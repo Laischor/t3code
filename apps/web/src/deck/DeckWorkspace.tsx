@@ -157,6 +157,20 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
     [threadRef],
   );
 
+  const renameTab = useCallback(
+    (tabId: string, title: string) => {
+      useDeckStore.getState().renameTab(threadRef, tabId, title);
+    },
+    [threadRef],
+  );
+
+  const reorderTab = useCallback(
+    (tabId: string, toIndex: number) => {
+      useDeckStore.getState().reorderTab(threadRef, tabId, toIndex);
+    },
+    [threadRef],
+  );
+
   const activateTab = useCallback(
     (paneId: string, tabId: string) => {
       useDeckStore.getState().setActiveTab(threadRef, paneId, tabId);
@@ -252,6 +266,8 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         onSplit={splitPane}
         pendingUrlFocusTabId={pendingUrlFocusTabId}
         onUrlFocused={() => setPendingUrlFocusTabId(null)}
+        onRenameTab={renameTab}
+        onReorderTab={reorderTab}
         insetForTitlebar={leaf.id === firstPaneId}
       />
     ),
@@ -265,6 +281,8 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       runtimeEnv,
       firstPaneId,
       pendingUrlFocusTabId,
+      renameTab,
+      reorderTab,
       splitPane,
       threadRef,
       worktreePath,
@@ -299,7 +317,61 @@ function PaneMessage({ children }: { children: ReactNode }) {
   );
 }
 
+function DropMarker({ side }: { side: "left" | "right" }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "absolute inset-y-1 w-0.5 rounded-full bg-primary",
+        side === "left" ? "left-0" : "right-0",
+      )}
+    />
+  );
+}
+
+/** Inline tab rename: Enter or blur commits, Escape reverts. */
+function TabNameInput({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  const cancelledRef = useRef(false);
+
+  return (
+    <input
+      autoFocus
+      value={draft}
+      aria-label="Rename tab"
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={(event) => event.currentTarget.select()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onBlur={() => {
+        if (cancelledRef.current) return;
+        onCommit(draft);
+      }}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onCommit(draft);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          cancelledRef.current = true;
+          onCancel();
+        }
+      }}
+      className="min-w-16 max-w-40 rounded-sm bg-background px-1 text-xs outline-none ring-1 ring-primary/60"
+    />
+  );
+}
+
 function tabTitle(tab: DeckTab): string {
+  if (tab.title) return tab.title;
   return tab.kind === "terminal" ? getTerminalLabel(tab.terminalId ?? tab.id) : "Browser";
 }
 
@@ -319,6 +391,8 @@ interface PaneTabsProps {
   /** Tab that should open with its URL bar focused, if it is in this pane. */
   pendingUrlFocusTabId: string | null;
   onUrlFocused: () => void;
+  onRenameTab: (tabId: string, title: string) => void;
+  onReorderTab: (tabId: string, toIndex: number) => void;
   /** Leaves room for the window controls when the sidebar is collapsed. */
   insetForTitlebar: boolean;
 }
@@ -338,17 +412,33 @@ function PaneTabs({
   onSplit,
   pendingUrlFocusTabId,
   onUrlFocused,
+  onRenameTab,
+  onReorderTab,
   insetForTitlebar,
 }: PaneTabsProps) {
   const current = activeTab(leaf);
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const dragTabIdRef = useRef<string | null>(null);
 
   return (
     <>
       <div
         className={cn(
-          "flex h-7 shrink-0 items-stretch gap-px overflow-x-auto border-b text-xs",
+          "flex h-9 shrink-0 items-stretch gap-px overflow-x-auto border-b text-xs",
           isActive ? "text-foreground" : "text-muted-foreground",
         )}
+        onDragOver={(event) => {
+          if (dragTabIdRef.current) event.preventDefault();
+        }}
+        onDrop={(event) => {
+          const dragged = dragTabIdRef.current;
+          if (!dragged || dropIndex === null) return;
+          event.preventDefault();
+          onReorderTab(dragged, dropIndex);
+          dragTabIdRef.current = null;
+          setDropIndex(null);
+        }}
       >
         {insetForTitlebar ? (
           // Doubles as somewhere to grab the window, which the tab strip
@@ -358,25 +448,63 @@ function PaneTabs({
             className="drag-region hidden shrink-0 [[data-sidebar-state=collapsed]_&]:block [[data-sidebar-state=collapsed]_&]:w-[var(--workspace-titlebar-content-left)]"
           />
         ) : null}
-        {leaf.tabs.map((tab) => {
+        {leaf.tabs.map((tab, index) => {
           const selected = tab.id === current?.id;
+          const renaming = tab.id === renamingTabId;
           return (
             <div
               key={tab.id}
               role="tab"
               aria-selected={selected}
-              onPointerDown={() => onSelectTab(tab.id)}
+              draggable={!renaming}
+              onDragStart={(event) => {
+                dragTabIdRef.current = tab.id;
+                event.dataTransfer.effectAllowed = "move";
+                // Firefox refuses to start a drag without payload.
+                event.dataTransfer.setData("text/plain", tab.id);
+              }}
+              onDragEnd={() => {
+                dragTabIdRef.current = null;
+                setDropIndex(null);
+              }}
+              onDragOver={(event) => {
+                if (!dragTabIdRef.current) return;
+                event.preventDefault();
+                // Past the midpoint the tab belongs after this one.
+                const rect = event.currentTarget.getBoundingClientRect();
+                const after = event.clientX > rect.left + rect.width / 2;
+                setDropIndex(after ? index + 1 : index);
+              }}
+              onPointerDown={() => {
+                if (!renaming) onSelectTab(tab.id);
+              }}
+              onDoubleClick={() => setRenamingTabId(tab.id)}
               className={cn(
-                "group flex min-w-0 shrink-0 cursor-default items-center gap-1 border-r px-2",
+                "group relative flex min-w-0 shrink-0 cursor-default items-center gap-1.5 border-r px-2.5",
                 selected ? "bg-accent/60" : "hover:bg-accent/30",
               )}
             >
+              {dropIndex === index ? <DropMarker side="left" /> : null}
+              {dropIndex === index + 1 && index === leaf.tabs.length - 1 ? (
+                <DropMarker side="right" />
+              ) : null}
               {tab.kind === "terminal" ? (
-                <TerminalSquare className="size-3 shrink-0 opacity-60" />
+                <TerminalSquare className="size-3.5 shrink-0 opacity-60" />
               ) : (
-                <Globe className="size-3 shrink-0 opacity-60" />
+                <Globe className="size-3.5 shrink-0 opacity-60" />
               )}
-              <span className="truncate">{tabTitle(tab)}</span>
+              {renaming ? (
+                <TabNameInput
+                  initial={tabTitle(tab)}
+                  onCommit={(next) => {
+                    onRenameTab(tab.id, next);
+                    setRenamingTabId(null);
+                  }}
+                  onCancel={() => setRenamingTabId(null)}
+                />
+              ) : (
+                <span className="truncate">{tabTitle(tab)}</span>
+              )}
               <button
                 type="button"
                 aria-label={`Close ${tabTitle(tab)}`}

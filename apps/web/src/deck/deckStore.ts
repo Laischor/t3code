@@ -21,6 +21,7 @@ import {
   nextActivePaneId,
   normalizePaneTree,
   paneLeaves,
+  reorderTab,
   setActiveTab,
   setSplitSizes,
   splitPane,
@@ -173,6 +174,10 @@ interface DeckStoreState {
   /** Closes a tab; closing the last one closes its pane. */
   closeTab: (threadRef: ScopedThreadRef, tabId: string) => void;
   setActiveTab: (threadRef: ScopedThreadRef, paneId: string, tabId: string) => void;
+  /** Moves a tab within its pane. */
+  reorderTab: (threadRef: ScopedThreadRef, tabId: string, toIndex: number) => void;
+  /** Renames a tab; a blank name clears it back to the derived label. */
+  renameTab: (threadRef: ScopedThreadRef, tabId: string, title: string) => void;
   /** Attaches the backing session id once the preview session has opened. */
   attachTabSession: (
     threadRef: ScopedThreadRef,
@@ -261,6 +266,26 @@ export const useDeckStore = create<DeckStoreState>()(
           update(threadRef, (state) => {
             const root = setActiveTab(state.root, paneId, tabId);
             return root === state.root ? state : { ...state, root, activePaneId: paneId };
+          }),
+
+        reorderTab: (threadRef, tabId, toIndex) =>
+          update(threadRef, (state) => {
+            const root = reorderTab(state.root, tabId, toIndex);
+            return root === state.root ? state : { ...state, root };
+          }),
+
+        renameTab: (threadRef, tabId, title) =>
+          update(threadRef, (state) => {
+            const trimmed = title.trim();
+            const root = updateTab(state.root, tabId, (tab) => {
+              if ((tab.title ?? "") === trimmed) return tab;
+              if (trimmed.length === 0) {
+                const { title: _cleared, ...rest } = tab;
+                return rest;
+              }
+              return { ...tab, title: trimmed };
+            });
+            return root === state.root ? state : { ...state, root };
           }),
 
         attachTabSession: (threadRef, tabId, session) =>

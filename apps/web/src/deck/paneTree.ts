@@ -24,6 +24,8 @@ export type DeckSplitDirection = "horizontal" | "vertical";
 export interface DeckTab {
   readonly id: string;
   readonly kind: DeckTabKind;
+  /** User-given name. Falls back to a derived label when unset. */
+  readonly title?: string;
   /** Terminal session id. Only set when `kind` is "terminal". */
   readonly terminalId?: string;
   /** Preview tab id. Only set when `kind` is "browser"; null until it opens. */
@@ -346,6 +348,28 @@ export function closeTab(root: DeckPaneNode | null, tabId: string): DeckPaneNode
   });
 }
 
+/** Moves a tab within its pane, clamping the target index. */
+export function reorderTab(
+  root: DeckPaneNode | null,
+  tabId: string,
+  toIndex: number,
+): DeckPaneNode | null {
+  if (!root) return root;
+  const pane = findPaneForTab(root, tabId);
+  if (!pane) return root;
+  return mapLeaf(root, pane.id, (leaf) => {
+    const from = leaf.tabs.findIndex((tab) => tab.id === tabId);
+    if (from < 0) return leaf;
+    const clamped = Math.min(Math.max(toIndex, 0), leaf.tabs.length - 1);
+    if (clamped === from) return leaf;
+    const tabs = [...leaf.tabs];
+    const [moved] = tabs.splice(from, 1);
+    if (!moved) return leaf;
+    tabs.splice(clamped, 0, moved);
+    return { ...leaf, tabs };
+  });
+}
+
 export function setActiveTab(
   root: DeckPaneNode | null,
   paneId: string,
@@ -450,9 +474,11 @@ function normalizeTab(raw: unknown, seenIds: Set<string>): DeckTab | null {
   if (id.length === 0 || seenIds.has(id)) return null;
   if (candidate.kind !== "terminal" && candidate.kind !== "browser") return null;
   seenIds.add(id);
+  const title = typeof candidate.title === "string" ? candidate.title.trim() : "";
   return {
     id,
     kind: candidate.kind,
+    ...(title.length > 0 ? { title } : {}),
     ...(candidate.kind === "terminal" && typeof candidate.terminalId === "string"
       ? { terminalId: candidate.terminalId }
       : {}),

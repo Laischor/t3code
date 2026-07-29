@@ -17,6 +17,7 @@ import {
   findPaneForTab,
   findTab,
   paneTabs,
+  reorderTab,
   setActiveTab,
   updateTab,
   type DeckPaneLeaf,
@@ -364,6 +365,46 @@ describe("tabs", () => {
   it("activeTab falls back to the first tab when the id is stale", () => {
     const pane: DeckPaneLeaf = { type: "leaf", id: "a", tabs: [tab("t1")], activeTabId: "gone" };
     expect(activeTab(pane)?.id).toBe("t1");
+  });
+
+  it("reorders tabs within a pane", () => {
+    let root: DeckPaneNode | null = leaf("a");
+    root = addTab(root, "a", tab("t2"));
+    root = addTab(root, "a", tab("t3"));
+
+    root = reorderTab(root, "t3", 0);
+    expect(findLeaf(root, "a")?.tabs.map((t) => t.id)).toEqual(["t3", "a-tab", "t2"]);
+  });
+
+  it("clamps a reorder target and ignores a no-op", () => {
+    let root: DeckPaneNode | null = leaf("a");
+    root = addTab(root, "a", tab("t2"));
+
+    const moved = reorderTab(root, "a-tab", 99);
+    expect(findLeaf(moved, "a")?.tabs.map((t) => t.id)).toEqual(["t2", "a-tab"]);
+    expect(reorderTab(moved, "a-tab", 1)).toBe(moved);
+    expect(reorderTab(moved, "missing", 0)).toBe(moved);
+  });
+
+  it("keeps a renamed title through persistence", () => {
+    const named = { ...tab("t1"), title: "logs" };
+    const normalized = normalizePaneTree({
+      type: "leaf",
+      id: "a",
+      tabs: [named],
+      activeTabId: "t1",
+    });
+    expect(findTab(normalized, "t1")?.title).toBe("logs");
+  });
+
+  it("drops a blank title rather than storing it", () => {
+    const normalized = normalizePaneTree({
+      type: "leaf",
+      id: "a",
+      tabs: [{ id: "t1", kind: "terminal", title: "   " }],
+      activeTabId: "t1",
+    });
+    expect(findTab(normalized, "t1")?.title).toBeUndefined();
   });
 
   it("updates a tab in place", () => {
