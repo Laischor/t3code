@@ -1,9 +1,11 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";
+import { isDeckMode } from "../deck/deckMode";
+import { deckProjectKey, useDeckWindowStore } from "../deck/deckWindowStore";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
@@ -23,12 +25,54 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
   const { environments } = useEnvironments();
+  const deckMode = isDeckMode();
 
   if (authGateState.status === "hosted-static" && environments.length === 0) {
     return <HostedStaticOnboardingState />;
   }
 
+  if (deckMode) {
+    return <DeckWindowLanding />;
+  }
+
   return <IndexDraftLanding />;
+}
+
+/**
+ * Deck has no draft landing: open the most recent window, or create the first
+ * one for the most recently used project.
+ */
+function DeckWindowLanding() {
+  const navigate = useNavigate();
+  const projects = useProjects();
+  const threads = useThreadShells();
+  const bootstrapped = useAllEnvironmentShellsBootstrapped();
+  const windowsByProjectKey = useDeckWindowStore((store) => store.windowsByProjectKey);
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (startedRef.current || !bootstrapped) return;
+
+    const preferred =
+      sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? projects[0] ?? null;
+    if (!preferred) return;
+
+    const ref = { environmentId: preferred.environmentId, projectId: preferred.id };
+    const existing = windowsByProjectKey[deckProjectKey(ref)] ?? [];
+    startedRef.current = true;
+
+    const target = existing[existing.length - 1] ?? useDeckWindowStore.getState().createWindow(ref);
+    void navigate({
+      to: "/deck/$environmentId/$windowId",
+      params: { environmentId: ref.environmentId, windowId: target.id },
+      replace: true,
+    });
+  }, [bootstrapped, navigate, projects, threads, windowsByProjectKey]);
+
+  if (bootstrapped && projects.length === 0) {
+    return <IndexDraftLanding />;
+  }
+  return null;
 }
 
 /**

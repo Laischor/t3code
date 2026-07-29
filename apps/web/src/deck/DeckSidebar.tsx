@@ -1,0 +1,171 @@
+/**
+ * Deck's sidebar: projects, and the windows inside each one.
+ *
+ * Deliberately separate from T3's thread sidebars rather than woven into them.
+ * Those render an inbox — snooze and settle shelves, rename, change-request
+ * state — none of which applies to a window, and they are the files upstream
+ * churns most. Owning this one outright keeps rebases cheap.
+ */
+
+import { useNavigate, useParams } from "@tanstack/react-router";
+import { ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "~/components/ui/sidebar";
+import { cn } from "~/lib/utils";
+import { useProjects } from "../state/entities";
+import {
+  deckProjectKey,
+  useDeckWindowStore,
+  type DeckProjectRef,
+  type DeckWindow,
+} from "./deckWindowStore";
+
+export function DeckSidebar() {
+  const projects = useProjects();
+  const windowsByProjectKey = useDeckWindowStore((store) => store.windowsByProjectKey);
+  const navigate = useNavigate();
+  const activeWindowId = useParams({
+    strict: false,
+    select: (params) => (params as { windowId?: string }).windowId ?? null,
+  });
+
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleProject = useCallback((key: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const openWindow = useCallback(
+    (ref: DeckProjectRef, window: DeckWindow) => {
+      void navigate({
+        to: "/deck/$environmentId/$windowId",
+        params: { environmentId: ref.environmentId, windowId: window.id },
+      });
+    },
+    [navigate],
+  );
+
+  const createWindow = useCallback(
+    (ref: DeckProjectRef) => {
+      const window = useDeckWindowStore.getState().createWindow(ref);
+      openWindow(ref, window);
+    },
+    [openWindow],
+  );
+
+  const closeWindow = useCallback(
+    (ref: DeckProjectRef, window: DeckWindow) => {
+      const successor = (
+        useDeckWindowStore.getState().windowsByProjectKey[deckProjectKey(ref)] ?? []
+      ).find((entry) => entry.id !== window.id);
+      useDeckWindowStore.getState().closeWindow(ref, window.id);
+      // Only move if the window being closed is the one on screen.
+      if (activeWindowId !== window.id) return;
+      if (successor) openWindow(ref, successor);
+      else void navigate({ to: "/" });
+    },
+    [activeWindowId, navigate, openWindow],
+  );
+
+  const sortedProjects = useMemo(
+    () => [...projects].sort((a, b) => a.title.localeCompare(b.title)),
+    [projects],
+  );
+
+  return (
+    <Sidebar>
+      <SidebarHeader className="px-3 py-2 text-sm font-medium">Projects</SidebarHeader>
+      <SidebarContent>
+        {sortedProjects.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-muted-foreground">No projects yet.</p>
+        ) : null}
+
+        {sortedProjects.map((project) => {
+          const ref: DeckProjectRef = {
+            environmentId: project.environmentId,
+            projectId: project.id,
+          };
+          const key = deckProjectKey(ref);
+          const windows = windowsByProjectKey[key] ?? [];
+          const isCollapsed = collapsed.has(key);
+
+          return (
+            <SidebarGroup key={key} className="py-1">
+              <div className="flex items-center gap-1 pr-1">
+                <button
+                  type="button"
+                  onClick={() => toggleProject(key)}
+                  aria-expanded={!isCollapsed}
+                  className="flex min-w-0 flex-1 items-center gap-1 px-2 py-1 text-xs font-medium text-sidebar-foreground/70 hover:text-sidebar-foreground"
+                  title={project.workspaceRoot}
+                >
+                  <ChevronRightIcon
+                    aria-hidden
+                    className={cn(
+                      "size-3 shrink-0 transition-transform",
+                      !isCollapsed && "rotate-90",
+                    )}
+                  />
+                  <span className="truncate">{project.title}</span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={`New window in ${project.title}`}
+                  title="New window"
+                  className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  onClick={() => createWindow(ref)}
+                >
+                  <PlusIcon className="size-3.5" />
+                </button>
+              </div>
+
+              {isCollapsed ? null : (
+                <SidebarMenu>
+                  {windows.length === 0 ? (
+                    <p className="px-3 py-1 text-xs text-muted-foreground">No windows yet.</p>
+                  ) : null}
+                  {windows.map((window) => (
+                    <SidebarMenuItem key={window.id} className="group/window">
+                      <SidebarMenuButton
+                        isActive={window.id === activeWindowId}
+                        onClick={() => openWindow(ref, window)}
+                        className="pr-7"
+                      >
+                        <span className="truncate">{window.name}</span>
+                      </SidebarMenuButton>
+                      <button
+                        type="button"
+                        aria-label={`Close ${window.name}`}
+                        title="Close window"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover/window:opacity-100"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          closeWindow(ref, window);
+                        }}
+                      >
+                        <XIcon className="size-3" />
+                      </button>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              )}
+            </SidebarGroup>
+          );
+        })}
+      </SidebarContent>
+    </Sidebar>
+  );
+}
