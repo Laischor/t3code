@@ -14,7 +14,6 @@ import {
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewDevToolsBoundsInputSchema,
-  DesktopPreviewDevToolsDockResultSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
@@ -158,7 +157,7 @@ export const openDevTools = tabMethod(
 export const openDevToolsDocked = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_OPEN_DEVTOOLS_DOCKED_CHANNEL,
   payload: DesktopPreviewDevToolsBoundsInputSchema,
-  result: DesktopPreviewDevToolsDockResultSchema,
+  result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.openDevToolsDocked")(function* ({
     tabId,
     x,
@@ -167,7 +166,7 @@ export const openDevToolsDocked = DesktopIpc.makeIpcMethod({
     height,
   }) {
     const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.openDevToolsDocked(tabId, { x, y, width, height });
+    yield* manager.openDevToolsDocked(tabId, { x, y, width, height });
   }),
 });
 export const setDevToolsBounds = DesktopIpc.makeIpcMethod({
