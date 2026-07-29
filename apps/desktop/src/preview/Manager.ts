@@ -1737,8 +1737,22 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }),
       );
     }
+    if (host.id === wc.id) {
+      return yield* Effect.fail(
+        new PreviewOperationError({
+          operation: "openDevToolsInHost",
+          tabId,
+          webContentsId: host.id,
+          cause: new Error("DevTools cannot be hosted by the page they inspect"),
+        }),
+      );
+    }
+    // Already-open DevTools are bound to whatever surface they were opened
+    // into; re-point them rather than leaving the caller with a blank host.
     if (wc.isDevToolsOpened()) {
-      return;
+      yield* attempt({ operation: "openDevToolsInHost.close", tabId, webContentsId: wc.id }, () =>
+        wc.closeDevTools(),
+      );
     }
     // DevTools hold the debugger, which is the same channel the automation
     // control session uses; restore it once they close.
