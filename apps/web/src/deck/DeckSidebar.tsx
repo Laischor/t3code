@@ -9,17 +9,18 @@
 
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
+import { SidebarChromeFooter, SidebarChromeHeader } from "~/components/sidebar/SidebarChrome";
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "~/components/ui/sidebar";
+import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 import { useProjects } from "../state/entities";
 import {
@@ -87,7 +88,7 @@ export function DeckSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader className="px-3 py-2 text-sm font-medium">Projects</SidebarHeader>
+      <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent>
         {sortedProjects.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted-foreground">No projects yet.</p>
@@ -138,27 +139,16 @@ export function DeckSidebar() {
                     <p className="px-3 py-1 text-xs text-muted-foreground">No windows yet.</p>
                   ) : null}
                   {windows.map((window) => (
-                    <SidebarMenuItem key={window.id} className="group/window">
-                      <SidebarMenuButton
-                        isActive={window.id === activeWindowId}
-                        onClick={() => openWindow(ref, window)}
-                        className="pr-7"
-                      >
-                        <span className="truncate">{window.name}</span>
-                      </SidebarMenuButton>
-                      <button
-                        type="button"
-                        aria-label={`Close ${window.name}`}
-                        title="Close window"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover/window:opacity-100"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          closeWindow(ref, window);
-                        }}
-                      >
-                        <XIcon className="size-3" />
-                      </button>
-                    </SidebarMenuItem>
+                    <WindowRow
+                      key={window.id}
+                      window={window}
+                      isActive={window.id === activeWindowId}
+                      onOpen={() => openWindow(ref, window)}
+                      onRename={(name) =>
+                        useDeckWindowStore.getState().renameWindow(ref, window.id, name)
+                      }
+                      onClose={() => closeWindow(ref, window)}
+                    />
                   ))}
                 </SidebarMenu>
               )}
@@ -166,6 +156,92 @@ export function DeckSidebar() {
           );
         })}
       </SidebarContent>
+      <SidebarChromeFooter />
     </Sidebar>
+  );
+}
+
+function WindowRow({
+  window,
+  isActive,
+  onOpen,
+  onRename,
+  onClose,
+}: {
+  window: DeckWindow;
+  isActive: boolean;
+  onOpen: () => void;
+  onRename: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const isRenaming = draft !== null;
+  // Escape unmounts the input, and a blur fired on the way out must not be
+  // mistaken for a confirmation.
+  const cancelledRef = useRef(false);
+
+  const commit = useCallback(() => {
+    if (draft === null || cancelledRef.current) return;
+    // A blank name is a no-op in the store, so this also covers "cleared it".
+    onRename(draft);
+    setDraft(null);
+  }, [draft, onRename]);
+
+  const cancel = useCallback(() => {
+    cancelledRef.current = true;
+    setDraft(null);
+  }, []);
+
+  const startRenaming = useCallback((name: string) => {
+    cancelledRef.current = false;
+    setDraft(name);
+  }, []);
+
+  return (
+    <SidebarMenuItem className="group/window">
+      {isRenaming ? (
+        <input
+          autoFocus
+          value={draft}
+          aria-label={`Rename ${window.name}`}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              cancel();
+            }
+          }}
+          onFocus={(event) => event.currentTarget.select()}
+          className="h-8 w-full rounded-md border border-sidebar-border bg-sidebar px-2 text-sm outline-none focus:border-sidebar-ring"
+        />
+      ) : (
+        <>
+          <SidebarMenuButton
+            isActive={isActive}
+            onClick={onOpen}
+            onDoubleClick={() => startRenaming(window.name)}
+            className="pr-7"
+          >
+            <span className="truncate">{window.name}</span>
+          </SidebarMenuButton>
+          <button
+            type="button"
+            aria-label={`Close ${window.name}`}
+            title="Close window"
+            className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover/window:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
+          >
+            <XIcon className="size-3" />
+          </button>
+        </>
+      )}
+    </SidebarMenuItem>
   );
 }
