@@ -1,13 +1,16 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
+import { isDeckMode } from "../deck/deckMode";
+import { DeckWorkspace } from "../deck/DeckWorkspace";
 import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadRoutes";
 import { SidebarInset } from "~/components/ui/sidebar";
 import {
   useEnvironmentThreadRefs,
+  useProjects,
   useThreadDetail,
   useThreadShell,
   useThreadStatus,
@@ -16,10 +19,12 @@ import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 
 function ChatThreadRouteView() {
+  const deckMode = isDeckMode();
   const navigate = useNavigate();
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
+  const projects = useProjects();
   const shell = useEnvironmentQuery(
     threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
   );
@@ -51,6 +56,20 @@ function ChatThreadRouteView() {
   const serverThreadStarted = threadHasStarted(serverThreadDetail);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
 
+  const projectCwd = useMemo(() => {
+    if (!threadRef) return null;
+    const byThreadProject = serverThreadShell?.projectId
+      ? projects.find(
+          (p) =>
+            p.environmentId === threadRef.environmentId && p.id === serverThreadShell.projectId,
+        )
+      : undefined;
+    if (byThreadProject?.workspaceRoot) return byThreadProject.workspaceRoot;
+    return (
+      projects.find((p) => p.environmentId === threadRef.environmentId)?.workspaceRoot ?? null
+    );
+  }, [projects, serverThreadShell?.projectId, threadRef]);
+
   useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
       return;
@@ -70,6 +89,20 @@ function ChatThreadRouteView() {
 
   if (!threadRef || renderState !== "ready") {
     return null;
+  }
+
+  if (deckMode) {
+    return (
+      <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
+        {projectCwd ? (
+          <DeckWorkspace threadRef={threadRef} cwd={projectCwd} />
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            No project workspace for this thread.
+          </div>
+        )}
+      </SidebarInset>
+    );
   }
 
   return (

@@ -9,14 +9,18 @@ import {
 } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";
 import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
+import { isDeckMode } from "../deck/deckMode";
+import { DeckWorkspace } from "../deck/DeckWorkspace";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { useThread, useThreadRefs } from "../state/entities";
+import { useProjects, useThread, useThreadRefs } from "../state/entities";
 
 function DraftChatThreadRouteView() {
+  const deckMode = isDeckMode();
   const navigate = useNavigate();
   const { draftId: rawDraftId } = Route.useParams();
   const draftId = DraftId.make(rawDraftId);
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
+  const projects = useProjects();
   const threadRefs = useThreadRefs();
   const inferredThreadRef = draftSession
     ? (threadRefs.find(
@@ -29,6 +33,10 @@ function DraftChatThreadRouteView() {
   const serverThread = useThread(serverThreadRef);
   const serverThreadStarted = threadHasStarted(serverThread);
   const canonicalThreadRef = serverThreadStarted ? serverThreadRef : null;
+
+  const projectCwd =
+    projects.find((p) => draftSession && p.environmentId === draftSession.environmentId)
+      ?.workspaceRoot ?? null;
 
   useEffect(() => {
     if (!inferredThreadRef || draftSession?.promotedTo) {
@@ -68,6 +76,26 @@ function DraftChatThreadRouteView() {
 
   if (!draftSession) {
     return null;
+  }
+
+  if (deckMode) {
+    return (
+      <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
+        {projectCwd ? (
+          <DeckWorkspace
+            threadRef={{
+              environmentId: draftSession.environmentId,
+              threadId: draftSession.threadId,
+            }}
+            cwd={projectCwd}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            No project workspace for this draft.
+          </div>
+        )}
+      </SidebarInset>
+    );
   }
 
   return (
