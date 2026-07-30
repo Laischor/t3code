@@ -917,6 +917,19 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
   webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 
+/** What the main process actually did, so a blank dock can be diagnosed. */
+export const DesktopPreviewDevToolsDockResultSchema = Schema.Struct({
+  devToolsOpened: Schema.Boolean,
+  requestedBounds: Schema.String,
+  actualBounds: Schema.String,
+  windowContentBounds: Schema.String,
+  devToolsUrl: Schema.NullOr(Schema.String),
+  viewAttached: Schema.Boolean,
+  viewVisible: Schema.Boolean,
+  childViewCount: Schema.Int,
+});
+export type DesktopPreviewDevToolsDockResult = typeof DesktopPreviewDevToolsDockResultSchema.Type;
+
 export const DesktopPreviewDevToolsBoundsInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   x: Schema.Int,
@@ -1078,7 +1091,7 @@ export interface DesktopPreviewBridge {
   openDevToolsDocked: (
     tabId: string,
     bounds: { x: number; y: number; width: number; height: number },
-  ) => Promise<void>;
+  ) => Promise<DesktopPreviewDevToolsDockResult>;
   /** Reposition docked DevTools. No-op when they are not docked. */
   setDevToolsBounds: (
     tabId: string,
