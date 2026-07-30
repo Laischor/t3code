@@ -78,6 +78,8 @@ inactive surfaces at `HIDDEN_BROWSER_WEBVIEW_OFFSET` instead, driven by
 | `apps/web/src/deck/DeckPaneGrid.tsx`                          | Nested CSS grids with draggable dividers                                    |
 | `apps/web/src/deck/DeckWorkspace.tsx`                         | Toolbar, pane bootstrap, tab strips, terminal and browser tabs              |
 | `apps/web/src/deck/DeckDevToolsSlot.tsx`                      | Keeps the docked DevTools view aligned with its slot                        |
+| `apps/web/src/deck/DeckPalette.tsx`                           | ⌘K palette over windows and creation actions                                |
+| `apps/web/src/deck/deckShortcuts.ts`                          | Keyboard mapping, matched in the capture phase                              |
 | `apps/web/src/deck/deckMode.ts`                               | Pane mode toggle (`?deck=0` restores upstream chat)                         |
 | `apps/web/src/routes/_chat.deck.$environmentId.$windowId.tsx` | The window route                                                            |
 | `apps/web/src/components/TerminalViewport.tsx`                | Extracted from `ThreadTerminalDrawer` so drawer and grid share one terminal |
@@ -97,7 +99,12 @@ Kept deliberately small so rebases stay cheap:
   rename, change-request state) that does not apply to a window.
 - `apps/desktop/src/preview/Manager.ts`, `ipc/`, `preload.ts`,
   `packages/contracts/src/ipc.ts` — `openDevToolsDocked`, `setDevToolsBounds`
-  and `closeDevTools`.
+  and `closeDevTools`; deck shortcuts added to `APP_FORWARDED_SHORTCUTS`; real
+  popups for OAuth instead of navigating the opener.
+- `apps/desktop/src/preview/BrowserSession.ts` — permission prompts and the
+  blocklist check.
+- `apps/desktop/src/window/DesktopApplicationMenu.ts` — Close Window keeps its
+  menu entry but releases ⌘W, which deck binds to closing a tab.
 - `apps/web/vite.config.ts` — `T3CODE_WEB_REACT_COMPILER=0` skips the React
   Compiler babel pass, which OOMs on memory-constrained hosts.
 
@@ -108,6 +115,64 @@ pnpm install
 pnpm dev:desktop
 ```
 
+## Building a package
+
+```bash
+pnpm dist:desktop:dmg:arm64
+```
+
+Signing is off by default (`T3CODE_DESKTOP_SIGNED`), so this needs no Apple
+account. Two things follow from that:
+
+- Gatekeeper blocks the first launch. Right-click → Open, once.
+- The packaged app uses the `t3code` data directory while `pnpm dev:desktop`
+  uses `t3code-dev`, so it starts with no windows, panes or cookies from your
+  dev sessions.
+
+An unsigned build also gets a new designated requirement every time it is
+built, and macOS ties keychain access to that — so the Safe Storage prompt
+guarding cookie encryption reappears after every rebuild. `scripts/deck-codesign.sh`
+signs a build with a self-signed identity that stays put, which keeps the grant.
+It is a local identity, not an Apple one: Gatekeeper still asks on first launch.
+
+## Permissions
+
+`clipboard-read`, `geolocation` and `notifications` prompt per origin; the
+answer is remembered for the run of the app rather than persisted, so a
+mistaken allow does not outlive a restart. `clipboard-sanitized-write` stays
+granted — writing discloses nothing, and refusing it breaks ordinary Copy
+buttons. Everything else is denied outright.
+
+## Phishing and malware
+
+Electron ships no Safe Browsing: Chromium's service is not wired into Electron
+builds and there is no API to enable it. Main-frame navigation is matched
+against lists from abuse.ch and OpenPhish instead, on this machine, so no
+address is sent anywhere.
+
+Weaker than Google's by design — it catches known campaigns, not a domain
+registered an hour ago. It fails open throughout: an unreachable or malformed
+feed leaves browsing untouched, and a refresh returning nothing keeps the
+previous list rather than silently dropping protection.
+
+## Keyboard
+
+|                               |                                          |
+| ----------------------------- | ---------------------------------------- |
+| `⌘T` / `⇧⌘T`                  | new terminal / browser tab               |
+| `⌘W`                          | close the active tab                     |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | cycle tabs (`⇧⌘]` / `⇧⌘[` alias)         |
+| `⌘K`                          | palette: jump to a window, or create one |
+| `⌘N`                          | new window in the current project        |
+
+`⌘Tab` cannot be used: macOS takes it for the app switcher.
+
+These run on a capture-phase listener, because xterm claims keys on the
+terminal element and only lets a fixed set past its own handler. Keys pressed
+inside a browser pane belong to the guest, so they are also listed in
+`APP_FORWARDED_SHORTCUTS` in the preview manager, which forwards them to the
+window.
+
 ## DevTools in browser tabs
 
 The `</>` strip at the bottom of a browser tab docks DevTools into that tab,
@@ -117,6 +182,10 @@ They are hosted in a main-process `WebContentsView`. Electron's docking modes
 dock into the whole window rather than a pane, and `setDevToolsWebContents`
 needs a host that has never navigated — which rules out a `<webview>`, since it
 only creates its guest once a `src` is set and any `src` is a navigation.
+
+Docking waits for `devtools-opened` and fails if it never lands, so a dock that
+silently does nothing surfaces as an error with a fallback to a detached window
+rather than an empty panel.
 
 That view is not part of the DOM, so `DeckDevToolsSlot` reports its rect and
 keeps the view aligned: on its own resize, on window resize, and on scroll in
