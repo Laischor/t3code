@@ -424,6 +424,8 @@ const APP_FORWARDED_SHORTCUTS: ReadonlyArray<{
   // ctrl+tab / ctrl+shift+tab → cycle tabs
   { key: "Tab", meta: false, shift: false, control: true },
   { key: "Tab", meta: false, shift: true, control: true },
+  // mod+N → new window
+  { key: "n", meta: true, shift: false, control: false },
   // mod+shift+] / mod+shift+[ → cycle tabs. Shift reports the shifted
   // character on most layouts, so both forms are listed.
   { key: "]", meta: true, shift: true, control: false },

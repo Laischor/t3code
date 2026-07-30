@@ -25,6 +25,14 @@ describe("matchDeckShortcut", () => {
     expect(matchDeckShortcut(event("w", { metaKey: true, shiftKey: true }))).toBeNull();
   });
 
+  it("claims the palette and new-window shortcuts", () => {
+    expect(matchDeckShortcut(event("k", { metaKey: true }))).toBe("palette.open");
+    expect(matchDeckShortcut(event("n", { metaKey: true }))).toBe("window.new");
+    // Shifted variants stay free for whatever else wants them.
+    expect(matchDeckShortcut(event("k", { metaKey: true, shiftKey: true }))).toBeNull();
+    expect(matchDeckShortcut(event("n", { metaKey: true, shiftKey: true }))).toBeNull();
+  });
+
   it("cycles tabs with ctrl+tab", () => {
     expect(matchDeckShortcut(event("Tab", { ctrlKey: true }))).toBe("tab.next");
     expect(matchDeckShortcut(event("Tab", { ctrlKey: true, shiftKey: true }))).toBe("tab.previous");

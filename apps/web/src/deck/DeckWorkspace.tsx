@@ -8,6 +8,7 @@
  */
 
 import { useAtomValue } from "@effect/atom-react";
+import { useNavigate } from "@tanstack/react-router";
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import { getTerminalLabel, nextTerminalId } from "@t3tools/shared/terminalLabels";
 import {
@@ -39,8 +40,10 @@ import { previewEnvironment } from "../state/preview";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DeckDevToolsSlot } from "./DeckDevToolsSlot";
+import { DeckPalette } from "./DeckPalette";
 import { DeckPaneGrid } from "./DeckPaneGrid";
 import { createPaneLeaf, createTab, selectThreadPaneState, useDeckStore } from "./deckStore";
+import { findWindowProject, parseDeckProjectKey, useDeckWindowStore } from "./deckWindowStore";
 import { matchDeckShortcut, stepTabIndex } from "./deckShortcuts";
 import {
   activeTab,
@@ -76,6 +79,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
+  const navigate = useNavigate();
   const [focusRequestId, setFocusRequestId] = useState(0);
   // The browser tab that should open with its URL bar focused, cleared once it
   // has been handled so switching back later does not steal focus again.
@@ -83,6 +87,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   // Shared across panes: dragover cannot read dataTransfer, so the dragged tab
   // has to be known outside the strip it started in.
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const usedTerminalIds = useMemo(
     () =>
@@ -234,6 +239,25 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         case "tab.previous":
           cycleTab(-1);
           break;
+        case "palette.open":
+          setPaletteOpen(true);
+          break;
+        case "window.new": {
+          // Create in the project this window belongs to, so ⌘N stays where
+          // you are instead of asking which project you meant.
+          const found = findWindowProject(
+            useDeckWindowStore.getState().windowsByProjectKey,
+            threadRef.threadId,
+          );
+          const ref = found ? parseDeckProjectKey(found.projectKey) : null;
+          if (!ref) break;
+          const created = useDeckWindowStore.getState().createWindow(ref);
+          void navigate({
+            to: "/deck/$environmentId/$windowId",
+            params: { environmentId: ref.environmentId, windowId: created.id },
+          });
+          break;
+        }
         case "tab.close": {
           const state = useDeckStore.getState();
           const current = selectThreadPaneState(state.paneStateByThreadKey, threadRef);
@@ -246,7 +270,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [addTab, closeTab, cycleTab, threadRef]);
+  }, [addTab, closeTab, cycleTab, navigate, threadRef]);
 
   // Depth-first order puts the top-left pane first: the only one the macOS
   // traffic lights can reach once the sidebar is collapsed.
@@ -298,6 +322,12 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <DeckPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onNewTerminalTab={() => addTab("terminal")}
+        onNewBrowserTab={() => addTab("browser")}
+      />
       <div className="min-h-0 flex-1 p-1">
         {paneState.root ? (
           <DeckPaneGrid
