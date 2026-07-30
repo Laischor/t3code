@@ -33,6 +33,11 @@ describe("matchDeckShortcut", () => {
     expect(matchDeckShortcut(event("n", { metaKey: true, shiftKey: true }))).toBeNull();
   });
 
+  it("claims cmd+f for find in page", () => {
+    expect(matchDeckShortcut(event("f", { metaKey: true }))).toBe("page.find");
+    expect(matchDeckShortcut(event("f", { metaKey: true, shiftKey: true }))).toBeNull();
+  });
+
   it("cycles tabs with ctrl+tab", () => {
     expect(matchDeckShortcut(event("Tab", { ctrlKey: true }))).toBe("tab.next");
     expect(matchDeckShortcut(event("Tab", { ctrlKey: true, shiftKey: true }))).toBe("tab.previous");

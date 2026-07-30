@@ -40,6 +40,7 @@ import { previewEnvironment } from "../state/preview";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DeckDevToolsSlot } from "./DeckDevToolsSlot";
+import { DeckFindBar } from "./DeckFindBar";
 import { DeckPalette } from "./DeckPalette";
 import { DeckPaneGrid } from "./DeckPaneGrid";
 import { createPaneLeaf, createTab, selectThreadPaneState, useDeckStore } from "./deckStore";
@@ -88,6 +89,8 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   // has to be known outside the strip it started in.
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Tab whose find bar is open; only browser tabs can have one.
+  const [findTabId, setFindTabId] = useState<string | null>(null);
 
   const usedTerminalIds = useMemo(
     () =>
@@ -242,6 +245,15 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         case "palette.open":
           setPaletteOpen(true);
           break;
+        case "page.find": {
+          const state = useDeckStore.getState();
+          const current = selectThreadPaneState(state.paneStateByThreadKey, threadRef);
+          const pane = findLeaf(current.root, current.activePaneId);
+          const active = pane ? activeTab(pane) : null;
+          // Nothing to search in a terminal; leave the key alone there.
+          if (active?.kind === "browser") setFindTabId(active.id);
+          break;
+        }
         case "window.new": {
           // Create in the project this window belongs to, so ⌘N stays where
           // you are instead of asking which project you meant.
@@ -294,6 +306,8 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         onSplit={splitPane}
         pendingUrlFocusTabId={pendingUrlFocusTabId}
         onUrlFocused={() => setPendingUrlFocusTabId(null)}
+        findTabId={findTabId}
+        onCloseFind={() => setFindTabId(null)}
         onRenameTab={renameTab}
         onMoveTab={moveTab}
         draggingTabId={draggingTabId}
@@ -312,6 +326,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       firstPaneId,
       draggingTabId,
       moveTab,
+      findTabId,
       pendingUrlFocusTabId,
       renameTab,
       splitPane,
@@ -428,6 +443,8 @@ interface PaneTabsProps {
   /** Tab that should open with its URL bar focused, if it is in this pane. */
   pendingUrlFocusTabId: string | null;
   onUrlFocused: () => void;
+  findTabId: string | null;
+  onCloseFind: () => void;
   onRenameTab: (tabId: string, title: string) => void;
   onMoveTab: (tabId: string, targetPaneId: string, toIndex: number) => void;
   draggingTabId: string | null;
@@ -451,6 +468,8 @@ function PaneTabs({
   onSplit,
   pendingUrlFocusTabId,
   onUrlFocused,
+  findTabId,
+  onCloseFind,
   onRenameTab,
   onMoveTab,
   draggingTabId,
@@ -528,7 +547,11 @@ function PaneTabs({
               onDoubleClick={() => setRenamingTabId(tab.id)}
               className={cn(
                 "group relative flex min-w-0 shrink-0 cursor-default items-center gap-1.5 border-r px-2.5",
-                selected ? "bg-accent/60" : "hover:bg-accent/30",
+                // A tint alone was too faint to find at a glance; the accent bar
+                // and the lifted background carry it.
+                selected
+                  ? "bg-background font-medium text-foreground shadow-[inset_0_2px_0_0_var(--color-primary)]"
+                  : "bg-muted/40 text-muted-foreground hover:bg-accent/40",
               )}
             >
               {dropIndex === index ? <DropMarker side="left" /> : null}
@@ -672,6 +695,8 @@ function PaneTabs({
                   visible={selected}
                   autoFocusUrl={tab.id === pendingUrlFocusTabId}
                   onUrlFocused={onUrlFocused}
+                  findOpen={tab.id === findTabId}
+                  onCloseFind={onCloseFind}
                 />
               )}
             </div>
@@ -731,9 +756,13 @@ function BrowserTab({
   visible,
   autoFocusUrl,
   onUrlFocused,
+  findOpen,
+  onCloseFind,
 }: {
   tab: DeckTab;
   threadRef: ScopedThreadRef;
+  findOpen: boolean;
+  onCloseFind: () => void;
   /** True for a freshly opened tab, so it starts in the URL bar. */
   autoFocusUrl: boolean;
   onUrlFocused: () => void;
@@ -806,6 +835,9 @@ function BrowserTab({
           <PaneMessage>Opening browser…</PaneMessage>
         )}
       </div>
+      {previewTabId && findOpen ? (
+        <DeckFindBar threadRef={threadRef} tabId={previewTabId} onClose={onCloseFind} />
+      ) : null}
       {previewTabId ? (
         <>
           {devToolsOpen ? (

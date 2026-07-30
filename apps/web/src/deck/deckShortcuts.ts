@@ -14,7 +14,8 @@ export type DeckShortcut =
   | "tab.previous"
   | "tab.close"
   | "palette.open"
-  | "window.new";
+  | "window.new"
+  | "page.find";
 
 export interface DeckShortcutEvent {
   readonly key: string;
@@ -39,6 +40,7 @@ export function matchDeckShortcut(event: DeckShortcutEvent): DeckShortcut | null
     if (key === "w" && !event.shiftKey) return "tab.close";
     // T3 binds these to its own palette and thread creation; in deck mode they
     // mean windows, and the capture-phase listener claims them first.
+    if (key === "f" && !event.shiftKey) return "page.find";
     if (key === "k" && !event.shiftKey) return "palette.open";
     if (key === "n" && !event.shiftKey) return "window.new";
     if (event.shiftKey && (key === "]" || key === "}")) return "tab.next";

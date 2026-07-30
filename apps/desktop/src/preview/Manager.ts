@@ -428,6 +428,9 @@ const APP_FORWARDED_SHORTCUTS: ReadonlyArray<{
   { key: "Tab", meta: false, shift: true, control: true },
   // mod+N → new window
   { key: "n", meta: true, shift: false, control: false },
+  // mod+F → find in page. Forwarding matters most here: the guest has focus
+  // whenever you are reading the page you want to search.
+  { key: "f", meta: true, shift: false, control: false },
   // mod+shift+] / mod+shift+[ → cycle tabs. Shift reports the shifted
   // character on most layouts, so both forms are listed.
   { key: "]", meta: true, shift: true, control: false },
