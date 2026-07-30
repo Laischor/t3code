@@ -1,5 +1,5 @@
 import type { Session } from "electron";
-import { dialog, session } from "electron";
+import { dialog, session, webContents } from "electron";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -9,6 +9,8 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+import { createPreviewBlocklist } from "./PreviewBlocklistFeeds.ts";
+import { blockedHostFor } from "./previewBlocklist.ts";
 import {
   classifyPreviewPermission,
   permissionDecisionKey,
@@ -25,6 +27,44 @@ const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
  * outlive a restart, and the prompt is cheap to answer again.
  */
 const permissionDecisions = new Map<string, boolean>();
+
+/**
+ * Electron ships no Safe Browsing, so known-bad hosts are matched locally.
+ * One list for the whole app; sessions only consult it.
+ */
+const blocklist = createPreviewBlocklist();
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function blockedPageUrl(url: string, host: string): string {
+  const page = `<!doctype html>
+<meta charset="utf-8">
+<title>Blocked</title>
+<style>
+  :root { color-scheme: dark light; }
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 0; display: grid;
+         place-items: center; height: 100vh; background: #1b1b1f; color: #e8e8ea; }
+  main { max-width: 34rem; padding: 2rem; }
+  h1 { font-size: 1.1rem; margin: 0 0 .75rem; }
+  code { background: #ffffff14; padding: .1rem .35rem; border-radius: .25rem;
+         word-break: break-all; }
+  p { color: #b9b9c0; }
+</style>
+<main>
+  <h1>This site is on a known phishing or malware list</h1>
+  <p><code>${escapeHtml(host)}</code> appears in a public blocklist, so the page was not loaded.</p>
+  <p>Full address: <code>${escapeHtml(url)}</code></p>
+  <p>Lists come from abuse.ch and OpenPhish and are matched on this machine — no
+     address is sent anywhere. They can be wrong or out of date.</p>
+</main>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(page)}`;
+}
 
 /**
  * The permission *check* handler is synchronous, so it can only answer from
@@ -147,6 +187,32 @@ export const make = Effect.gen(function* BrowserSessionMake() {
             .replace(/Electron\/[\d.]+ /, "")
             .replace(/\s*t3code\/[\d.]+/, "");
           browserSession.setUserAgent(userAgent);
+          // Main-frame navigations only: subresources are not worth the cost,
+          // and blocking them would break pages in confusing ways.
+          browserSession.webRequest.onBeforeRequest(
+            { urls: ["http://*/*", "https://*/*"], types: ["mainFrame"] },
+            (details, callback) => {
+              const host = blockedHostFor(blocklist.hosts(), details.url);
+              if (!host) {
+                callback({});
+                return;
+              }
+              callback({ cancel: true });
+              // Loading from inside the handler would re-enter it, and a
+              // renderer-initiated data: navigation is refused by Chromium, so
+              // the notice has to be pushed from here.
+              const target =
+                details.webContentsId === undefined
+                  ? null
+                  : webContents.fromId(details.webContentsId);
+              if (!target || target.isDestroyed()) return;
+              const notice = blockedPageUrl(details.url, host);
+              setImmediate(() => {
+                if (!target.isDestroyed()) void target.loadURL(notice).catch(() => {});
+              });
+            },
+          );
+
           browserSession.setPermissionRequestHandler(
             (webContents, permission, callback, details) => {
               const policy = classifyPreviewPermission(permission);

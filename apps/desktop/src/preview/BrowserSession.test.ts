@@ -17,6 +17,7 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
       readonly setPermissionRequestHandler: ReturnType<typeof vi.fn>;
       readonly setPermissionCheckHandler: ReturnType<typeof vi.fn>;
       readonly setUserAgent: ReturnType<typeof vi.fn>;
+      readonly webRequest: { readonly onBeforeRequest: ReturnType<typeof vi.fn> };
     }
   >(),
 }));
@@ -25,6 +26,8 @@ vi.mock("electron", () => ({
   session: {
     fromPartition,
   },
+  dialog: { showMessageBox: vi.fn(() => Promise.resolve({ response: 0 })) },
+  webContents: { fromId: vi.fn(() => null) },
 }));
 
 import * as BrowserSession from "./BrowserSession.ts";
@@ -43,6 +46,7 @@ describe("BrowserSession", () => {
         setPermissionRequestHandler: vi.fn(),
         setPermissionCheckHandler: vi.fn(),
         setUserAgent: vi.fn(),
+        webRequest: { onBeforeRequest: vi.fn() },
       };
       sessions.set(partition, browserSession);
       return browserSession;
@@ -179,6 +183,32 @@ describe("BrowserSession", () => {
         `Failed to create a desktop preview browser session for scope environment-b (partition ${partition}).`,
       );
       assert.notInclude(error.message, cause.message);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("filters main-frame navigation and lets everything through by default", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const partition = yield* browserSessions.getPartition("scope-a");
+      yield* browserSessions.getSession("scope-a");
+
+      const browserSession = sessions.get(partition);
+      assert.isDefined(browserSession);
+
+      const [filter, handler] = browserSession.webRequest.onBeforeRequest.mock.calls[0] ?? [];
+      assert.isDefined(filter);
+      assert.isFunction(handler);
+      // Subresources are deliberately untouched; only top-level navigation.
+      assert.deepEqual(filter.types, ["mainFrame"]);
+      assert.deepEqual(filter.urls, ["http://*/*", "https://*/*"]);
+
+      // The feeds have not loaded in a test, so nothing may be blocked.
+      let response: { cancel?: boolean } | undefined;
+      handler({ url: "https://example.com/", webContentsId: undefined }, (value: unknown) => {
+        response = value as { cancel?: boolean };
+      });
+      assert.isDefined(response);
+      assert.notEqual(response.cancel, true);
     }).pipe(Effect.provide(layer)),
   );
 
