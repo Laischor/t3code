@@ -62,6 +62,11 @@ interface Props {
   visible: boolean;
   /** Bumping this focuses and selects the URL input. */
   focusUrlNonce?: number | undefined;
+  /**
+   * Which controller states get a badge. "agent" drops the "Human control"
+   * one, which is noise where a human driving the page is the normal case.
+   */
+  controllerBadge?: "always" | "agent" | undefined;
 }
 
 const localApi = typeof window === "undefined" ? null : ensureLocalApi();
@@ -76,6 +81,7 @@ export function PreviewView({
   configuredUrls,
   visible,
   focusUrlNonce: requestedFocusUrlNonce,
+  controllerBadge = "always",
 }: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
 
@@ -696,7 +702,7 @@ export function PreviewView({
             controller={controller}
           />
         ) : null}
-        {controller !== "none" ? (
+        {(controllerBadge === "always" ? controller !== "none" : controller === "agent") ? (
           <div className="pointer-events-none absolute left-3 top-3 z-40 rounded-full border border-border/70 bg-background/90 px-2.5 py-1 text-[11px] font-medium shadow-sm backdrop-blur">
             {controller === "agent" ? "Agent controlling browser" : "Human control"}
           </div>

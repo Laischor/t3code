@@ -799,6 +799,7 @@ function BrowserTab({
               tabId={previewTabId}
               visible={visible}
               focusUrlNonce={focusUrlNonce}
+              controllerBadge="agent"
             />
           </Suspense>
         ) : (

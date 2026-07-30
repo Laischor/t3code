@@ -15,6 +15,8 @@ interface Props {
   visible: boolean;
   /** Bumping this focuses and selects the URL input. */
   focusUrlNonce?: number | undefined;
+  /** Which controller states get a badge. */
+  controllerBadge?: "always" | "agent" | undefined;
 }
 
 export function PreviewPanel({
@@ -24,6 +26,7 @@ export function PreviewPanel({
   configuredUrls,
   visible,
   focusUrlNonce,
+  controllerBadge,
 }: Props) {
   if (!isPreviewSupportedInRuntime()) {
     return (
@@ -45,6 +48,7 @@ export function PreviewPanel({
         configuredUrls={configuredUrls}
         visible={visible}
         focusUrlNonce={focusUrlNonce}
+        controllerBadge={controllerBadge}
       />
     </PreviewPanelShell>
   );
