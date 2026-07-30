@@ -799,6 +799,32 @@ export function TerminalViewport({
     };
   }, [drawerHeight, environmentId, resizeEpoch, terminalId, threadId]);
 
+  /**
+   * Re-send the size once the session actually exists.
+   *
+   * The resize above runs on mount, before the server has created the PTY, so
+   * it is dropped and the PTY keeps its default row count. Nothing sends again
+   * while the layout is stable, which leaves full-screen programs — anything on
+   * the alternate buffer, like an editor — drawing into fewer rows than the
+   * pane shows. Programs that just scroll never reveal it.
+   */
+  const sizeSyncedRef = useRef(false);
+  useEffect(() => {
+    sizeSyncedRef.current = false;
+  }, [environmentId, terminalId, threadId]);
+
+  useEffect(() => {
+    if (sizeSyncedRef.current) return;
+    // "closed" is the placeholder state before a session is attached.
+    if (terminalStatus === "closed" && terminalVersion === 0) return;
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!terminal || !fitAddon) return;
+    sizeSyncedRef.current = true;
+    fitTerminalSafely(fitAddon);
+    void resizeTerminal(terminal.cols, terminal.rows);
+  }, [environmentId, terminalId, terminalStatus, terminalVersion, threadId]);
+
   // Pane grids resize the container directly rather than bumping resizeEpoch,
   // so refit whenever the box changes. Coalesced through rAF because a drag
   // emits many observations per frame.
