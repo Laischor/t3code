@@ -10,7 +10,7 @@
  * lined up with the box the layout gives it.
  */
 
-import type { DesktopPreviewDevToolsDockResult, ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
@@ -44,15 +44,7 @@ export function DeckDevToolsSlot({
     [previewState.serverEpoch, tabId, threadRef],
   );
   const [error, setError] = useState<string | null>(null);
-  // Shown behind the native view: if docking worked it is covered, if the view
-  // landed somewhere else these numbers say where.
-  const [diagnostics, setDiagnostics] = useState<DesktopPreviewDevToolsDockResult | null>(null);
   const openedRef = useRef(false);
-  // Counts how often the slot has had to open DevTools. Anything above 1 means
-  // the effect is being torn down and re-run, which is what "it flickers" looks
-  // like from here.
-  const openCountRef = useRef(0);
-  const [openCount, setOpenCount] = useState(0);
   // Kept in a ref so toggling visibility parks the view instead of tearing the
   // whole session down and losing whatever was open in DevTools.
   const visibleRef = useRef(visible);
@@ -95,25 +87,18 @@ export function DeckDevToolsSlot({
       if (!openedRef.current) {
         if (bounds.width === 0 || bounds.height === 0) return;
         openedRef.current = true;
-        openCountRef.current += 1;
-        setOpenCount(openCountRef.current);
-        void bridge
-          .openDevToolsDocked(runtimeTabId, target)
-          .then((result) => {
-            if (!disposed) setDiagnostics(result);
-          })
-          .catch((cause: unknown) => {
-            if (disposed) return;
-            openedRef.current = false;
-            // The tab is only known to the main process once its webview has
-            // registered, which can land after the slot renders.
-            if (retry < OPEN_RETRY_LIMIT) {
-              retry += 1;
-              retryTimer = window.setTimeout(sync, OPEN_RETRY_DELAY_MS);
-              return;
-            }
-            setError(errorMessage(cause));
-          });
+        void bridge.openDevToolsDocked(runtimeTabId, target).catch((cause: unknown) => {
+          if (disposed) return;
+          openedRef.current = false;
+          // The tab is only known to the main process once its webview has
+          // registered, which can land after the slot renders.
+          if (retry < OPEN_RETRY_LIMIT) {
+            retry += 1;
+            retryTimer = window.setTimeout(sync, OPEN_RETRY_DELAY_MS);
+            return;
+          }
+          setError(errorMessage(cause));
+        });
         return;
       }
       void bridge.setDevToolsBounds(runtimeTabId, target).catch(() => {
@@ -163,21 +148,6 @@ export function DeckDevToolsSlot({
 
   return (
     <div ref={slotRef} className="relative h-full w-full bg-background">
-      {!error && diagnostics ? (
-        <dl className="absolute inset-0 overflow-auto p-3 font-mono text-[10px] leading-relaxed text-muted-foreground">
-          <div>DevTools opened: {String(diagnostics.devToolsOpened)}</div>
-          <div>requested: {diagnostics.requestedBounds}</div>
-          <div>actual: {diagnostics.actualBounds}</div>
-          <div>window content: {diagnostics.windowContentBounds}</div>
-          <div>devtools url: {diagnostics.devToolsUrl ?? "(none)"}</div>
-          <div>opens: {openCount}</div>
-          <div>
-            view attached: {String(diagnostics.viewAttached)} · visible:{" "}
-            {String(diagnostics.viewVisible)} · siblings: {diagnostics.childViewCount}
-          </div>
-          <div className="break-all">runtime tab: {runtimeTabId}</div>
-        </dl>
-      ) : null}
       {error ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center">
           <p className="text-xs text-muted-foreground">Could not dock DevTools: {error}</p>
