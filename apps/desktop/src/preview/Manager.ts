@@ -28,6 +28,8 @@ import type {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+import { parsePopupFeatures } from "./popupFeatures.ts";
+
 /** How long to give DevTools to attach before treating the dock as failed. */
 const DEVTOOLS_OPEN_TIMEOUT_MS = 2000;
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
@@ -1376,10 +1378,35 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("did-stop-loading", sync);
         wc.on("did-fail-load", failed as never);
         wc.ipc.on(HUMAN_INPUT_CHANNEL, humanInput);
-        wc.setWindowOpenHandler(({ url }) => {
+        wc.setWindowOpenHandler((details) => {
+          // A real popup, not a target=_blank link. OAuth depends on this:
+          // the provider opens a window and posts the result back to its
+          // opener, which navigating in place cannot do.
+          if (details.disposition === "new-window") {
+            const size = parsePopupFeatures(details.features);
+            return {
+              action: "allow",
+              outlivesOpener: false,
+              overrideBrowserWindowOptions: {
+                ...size,
+                autoHideMenuBar: true,
+                webPreferences: {
+                  // Same session, so the popup carries the login cookies the
+                  // opener already has.
+                  session: wc.session,
+                  sandbox: true,
+                  nodeIntegration: false,
+                  contextIsolation: true,
+                },
+              },
+            };
+          }
+
+          // target=_blank and friends still land in this tab. Opening a new
+          // deck tab would need a round trip to the renderer.
           runFork(
             attemptPromise({ operation: "openPreviewWindow", tabId, webContentsId: wc.id }, () =>
-              wc.loadURL(url),
+              wc.loadURL(details.url),
             ).pipe(Effect.ignore),
           );
           return { action: "deny" };

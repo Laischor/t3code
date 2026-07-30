@@ -11,6 +11,7 @@ import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
+import { scheduleElectronUpdateReminder } from "./ElectronUpdateReminder.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
@@ -248,6 +249,9 @@ const startup = Effect.gen(function* () {
   yield* appIdentity.configure;
   yield* applicationMenu.configure;
   yield* updates.configure;
+  // Nothing here can perform the update — the fork is rebuilt by hand — so this
+  // only reminds, and only once per run.
+  yield* Effect.sync(() => scheduleElectronUpdateReminder());
   yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
 }).pipe(Effect.withSpan("desktop.startup"));
 
