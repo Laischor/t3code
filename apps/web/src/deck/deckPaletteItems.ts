@@ -26,7 +26,7 @@ export type DeckPaletteItem =
       readonly projectId: string;
     }
   | {
-      readonly kind: "new-terminal" | "new-browser";
+      readonly kind: "new-terminal" | "new-browser" | "new-project";
       readonly id: string;
       readonly label: string;
       readonly detail: string;
@@ -65,6 +65,13 @@ export function buildDeckPaletteItems(
     { kind: "new-terminal", id: "new-terminal", label: "New terminal tab", detail: "This pane" },
     { kind: "new-browser", id: "new-browser", label: "New browser tab", detail: "This pane" },
   );
+
+  items.push({
+    kind: "new-project",
+    id: "new-project",
+    label: "Add project…",
+    detail: "Choose a folder",
+  });
 
   for (const project of projects) {
     items.push({

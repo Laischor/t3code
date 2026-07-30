@@ -49,6 +49,7 @@ import {
   wrappedTerminalLinkRangeIntersectsBufferLine,
 } from "../terminal-links";
 import { openTerminalLinkInPreview } from "./preview/openTerminalLinkInPreview";
+import { resolveTerminalWrite } from "./terminalBufferSync";
 
 const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
 
@@ -729,13 +730,14 @@ export function TerminalViewport({
       return;
     }
 
-    if (
-      current.buffer.length >= previous.buffer.length &&
-      current.buffer.startsWith(previous.buffer)
-    ) {
-      terminal.write(current.buffer.slice(previous.buffer.length));
+    // The session buffer is capped and trimmed from the front, so a plain
+    // prefix check calls an ordinary append "unrelated" and resets the terminal
+    // on every update once a program outpaces the cap.
+    const write = resolveTerminalWrite(previous.buffer, current.buffer);
+    if (write.mode === "append") {
+      if (write.data.length > 0) terminal.write(write.data);
     } else {
-      writeTerminalBuffer(terminal, current.buffer);
+      writeTerminalBuffer(terminal, write.data);
     }
     terminal.clearSelection();
 

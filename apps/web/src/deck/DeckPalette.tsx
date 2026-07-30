@@ -6,11 +6,16 @@
  */
 
 import { useNavigate } from "@tanstack/react-router";
-import { Globe, PlusIcon, SquareTerminal, TerminalSquare } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { FolderPlus, Globe, PlusIcon, SquareTerminal, TerminalSquare } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { cn } from "~/lib/utils";
+import { inferProjectTitleFromPath } from "~/lib/projectPaths";
+import { cn, newProjectId } from "~/lib/utils";
+import { readLocalApi } from "~/localApi";
 import { useProjects } from "../state/entities";
+import { usePrimaryEnvironmentId } from "../state/environments";
+import { projectEnvironment } from "../state/projects";
+import { useAtomCommand } from "../state/use-atom-command";
 import {
   buildDeckPaletteItems,
   filterDeckPaletteItems,
@@ -35,6 +40,8 @@ export function DeckPalette({
 }: DeckPaletteProps) {
   const navigate = useNavigate();
   const projects = useProjects();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: true });
   const windowsByProjectKey = useDeckWindowStore((store) => store.windowsByProjectKey);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
@@ -76,6 +83,38 @@ export function DeckPalette({
       ?.scrollIntoView({ block: "nearest" });
   }, [selected]);
 
+  /**
+   * Adds a project by folder, then opens its first window — otherwise the app
+   * has no way back once you are down to one project, or none.
+   */
+  const addProject = useCallback(async () => {
+    const environmentId = primaryEnvironmentId;
+    if (!environmentId) return;
+    const workspaceRoot = await readLocalApi()?.dialogs.pickFolder();
+    if (!workspaceRoot) return;
+
+    // The id is ours, so the window can be created without waiting for the
+    // project to come back through the entity stream.
+    const projectId = newProjectId();
+    const result = await createProject({
+      environmentId,
+      input: {
+        projectId,
+        title: inferProjectTitleFromPath(workspaceRoot),
+        workspaceRoot,
+        createWorkspaceRootIfMissing: true,
+        defaultModelSelection: null,
+      },
+    });
+    if (result._tag === "Failure") return;
+
+    const created = useDeckWindowStore.getState().createWindow({ environmentId, projectId });
+    void navigate({
+      to: "/deck/$environmentId/$windowId",
+      params: { environmentId, windowId: created.id },
+    });
+  }, [createProject, navigate, primaryEnvironmentId]);
+
   if (!open) return null;
 
   const activate = (item: DeckPaletteItem | undefined) => {
@@ -105,6 +144,9 @@ export function DeckPalette({
         return;
       case "new-browser":
         onNewBrowserTab();
+        return;
+      case "new-project":
+        void addProject();
         return;
     }
   };
@@ -185,5 +227,7 @@ function PaletteIcon({ kind }: { kind: DeckPaletteItem["kind"] }) {
       return <TerminalSquare className={className} />;
     case "new-browser":
       return <Globe className={className} />;
+    case "new-project":
+      return <FolderPlus className={className} />;
   }
 }

@@ -53,10 +53,17 @@ describe("buildDeckPaletteItems", () => {
   });
 
   it("still offers actions with no projects", () => {
+    // The escape hatch out of an empty app: without this you cannot add the
+    // second project, or the first after deleting one.
     expect(buildDeckPaletteItems([]).map((item) => item.kind)).toEqual([
       "new-terminal",
       "new-browser",
+      "new-project",
     ]);
+  });
+
+  it("always offers adding a project", () => {
+    expect(buildDeckPaletteItems(projects).some((item) => item.kind === "new-project")).toBe(true);
   });
 });
 
