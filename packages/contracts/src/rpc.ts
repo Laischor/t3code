@@ -134,6 +134,32 @@ import {
 } from "./server.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
+  SqlCancelQueryInput,
+  SqlCloseInput,
+  SqlError,
+  SqlExecuteQueryInput,
+  SqlGetCompletionMetadataInput,
+  SqlGetCompletionMetadataResult,
+  SqlGetObjectDefinitionInput,
+  SqlGetObjectDefinitionResult,
+  SqlGetTableIdentityInput,
+  SqlGetTableIdentityResult,
+  SqlGetTreeChildrenInput,
+  SqlGetTreeChildrenResult,
+  SqlListConnectionsInput,
+  SqlListConnectionsResult,
+  SqlOpenInput,
+  SqlQueryStreamEvent,
+  SqlRemoveConnectionInput,
+  SqlSessionSnapshot,
+  SqlTestConnectionInput,
+  SqlTestConnectionResult,
+  SqlUpdateRowsInput,
+  SqlUpdateRowsResult,
+  SqlUpsertConnectionInput,
+  SqlConnectionSummary,
+} from "./sql.ts";
+import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
@@ -225,6 +251,21 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+
+  // SQL IDE methods
+  sqlListConnections: "sql.listConnections",
+  sqlUpsertConnection: "sql.upsertConnection",
+  sqlRemoveConnection: "sql.removeConnection",
+  sqlTestConnection: "sql.testConnection",
+  sqlOpen: "sql.open",
+  sqlClose: "sql.close",
+  sqlExecuteQuery: "sql.executeQuery",
+  sqlCancelQuery: "sql.cancelQuery",
+  sqlGetTreeChildren: "sql.getTreeChildren",
+  sqlGetObjectDefinition: "sql.getObjectDefinition",
+  sqlGetCompletionMetadata: "sql.getCompletionMetadata",
+  sqlGetTableIdentity: "sql.getTableIdentity",
+  sqlUpdateRows: "sql.updateRows",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -690,6 +731,82 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
   stream: true,
 });
 
+export const WsSqlListConnectionsRpc = Rpc.make(WS_METHODS.sqlListConnections, {
+  payload: SqlListConnectionsInput,
+  success: SqlListConnectionsResult,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlUpsertConnectionRpc = Rpc.make(WS_METHODS.sqlUpsertConnection, {
+  payload: SqlUpsertConnectionInput,
+  success: SqlConnectionSummary,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlRemoveConnectionRpc = Rpc.make(WS_METHODS.sqlRemoveConnection, {
+  payload: SqlRemoveConnectionInput,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlTestConnectionRpc = Rpc.make(WS_METHODS.sqlTestConnection, {
+  payload: SqlTestConnectionInput,
+  success: SqlTestConnectionResult,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlOpenRpc = Rpc.make(WS_METHODS.sqlOpen, {
+  payload: SqlOpenInput,
+  success: SqlSessionSnapshot,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlCloseRpc = Rpc.make(WS_METHODS.sqlClose, {
+  payload: SqlCloseInput,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlExecuteQueryRpc = Rpc.make(WS_METHODS.sqlExecuteQuery, {
+  payload: SqlExecuteQueryInput,
+  success: SqlQueryStreamEvent,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsSqlCancelQueryRpc = Rpc.make(WS_METHODS.sqlCancelQuery, {
+  payload: SqlCancelQueryInput,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlGetTreeChildrenRpc = Rpc.make(WS_METHODS.sqlGetTreeChildren, {
+  payload: SqlGetTreeChildrenInput,
+  success: SqlGetTreeChildrenResult,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlGetObjectDefinitionRpc = Rpc.make(WS_METHODS.sqlGetObjectDefinition, {
+  payload: SqlGetObjectDefinitionInput,
+  success: SqlGetObjectDefinitionResult,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlGetCompletionMetadataRpc = Rpc.make(WS_METHODS.sqlGetCompletionMetadata, {
+  payload: SqlGetCompletionMetadataInput,
+  success: SqlGetCompletionMetadataResult,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlGetTableIdentityRpc = Rpc.make(WS_METHODS.sqlGetTableIdentity, {
+  payload: SqlGetTableIdentityInput,
+  success: SqlGetTableIdentityResult,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
+export const WsSqlUpdateRowsRpc = Rpc.make(WS_METHODS.sqlUpdateRows, {
+  payload: SqlUpdateRowsInput,
+  success: SqlUpdateRowsResult,
+  error: Schema.Union([SqlError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -739,6 +856,19 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalCloseRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeTerminalMetadataRpc,
+  WsSqlListConnectionsRpc,
+  WsSqlUpsertConnectionRpc,
+  WsSqlRemoveConnectionRpc,
+  WsSqlTestConnectionRpc,
+  WsSqlOpenRpc,
+  WsSqlCloseRpc,
+  WsSqlExecuteQueryRpc,
+  WsSqlCancelQueryRpc,
+  WsSqlGetTreeChildrenRpc,
+  WsSqlGetObjectDefinitionRpc,
+  WsSqlGetCompletionMetadataRpc,
+  WsSqlGetTableIdentityRpc,
+  WsSqlUpdateRowsRpc,
   WsPreviewOpenRpc,
   WsPreviewNavigateRpc,
   WsPreviewResizeRpc,

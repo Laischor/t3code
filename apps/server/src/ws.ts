@@ -96,6 +96,7 @@ import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import * as SqlIdeService from "./sql/SqlIdeService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -350,6 +351,21 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.terminalClose, AuthTerminalOperateScope],
   [WS_METHODS.subscribeTerminalEvents, AuthTerminalOperateScope],
   [WS_METHODS.subscribeTerminalMetadata, AuthTerminalOperateScope],
+  // Running arbitrary SQL against user-configured databases is equivalent in
+  // power to a shell, so the SQL IDE rides on the terminal scope.
+  [WS_METHODS.sqlListConnections, AuthTerminalOperateScope],
+  [WS_METHODS.sqlUpsertConnection, AuthTerminalOperateScope],
+  [WS_METHODS.sqlRemoveConnection, AuthTerminalOperateScope],
+  [WS_METHODS.sqlTestConnection, AuthTerminalOperateScope],
+  [WS_METHODS.sqlOpen, AuthTerminalOperateScope],
+  [WS_METHODS.sqlClose, AuthTerminalOperateScope],
+  [WS_METHODS.sqlExecuteQuery, AuthTerminalOperateScope],
+  [WS_METHODS.sqlCancelQuery, AuthTerminalOperateScope],
+  [WS_METHODS.sqlGetTreeChildren, AuthTerminalOperateScope],
+  [WS_METHODS.sqlGetObjectDefinition, AuthTerminalOperateScope],
+  [WS_METHODS.sqlGetCompletionMetadata, AuthTerminalOperateScope],
+  [WS_METHODS.sqlGetTableIdentity, AuthTerminalOperateScope],
+  [WS_METHODS.sqlUpdateRows, AuthTerminalOperateScope],
   [WS_METHODS.previewOpen, AuthOrchestrationOperateScope],
   [WS_METHODS.previewNavigate, AuthOrchestrationOperateScope],
   [WS_METHODS.previewResize, AuthOrchestrationOperateScope],
@@ -425,6 +441,7 @@ const makeWsRpcLayer = (
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
+      const sqlIde = yield* SqlIdeService.SqlIdeService;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
@@ -1851,6 +1868,60 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "terminal" },
           ),
+        [WS_METHODS.sqlListConnections]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlListConnections, sqlIde.listConnections(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlUpsertConnection]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlUpsertConnection, sqlIde.upsertConnection(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlRemoveConnection]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlRemoveConnection, sqlIde.removeConnection(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlTestConnection]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlTestConnection, sqlIde.testConnection(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlOpen]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlOpen, sqlIde.open(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlClose]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlClose, sqlIde.close(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlExecuteQuery]: (input) =>
+          observeRpcStream(WS_METHODS.sqlExecuteQuery, sqlIde.executeQuery(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlCancelQuery]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlCancelQuery, sqlIde.cancelQuery(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlGetTreeChildren]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlGetTreeChildren, sqlIde.getTreeChildren(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlGetObjectDefinition]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlGetObjectDefinition, sqlIde.getObjectDefinition(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlGetCompletionMetadata]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sqlGetCompletionMetadata,
+            sqlIde.getCompletionMetadata(input),
+            { "rpc.aggregate": "sql" },
+          ),
+        [WS_METHODS.sqlGetTableIdentity]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlGetTableIdentity, sqlIde.getTableIdentity(input), {
+            "rpc.aggregate": "sql",
+          }),
+        [WS_METHODS.sqlUpdateRows]: (input) =>
+          observeRpcEffect(WS_METHODS.sqlUpdateRows, sqlIde.updateRows(input), {
+            "rpc.aggregate": "sql",
+          }),
         [WS_METHODS.previewOpen]: (input) =>
           observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {
             "rpc.aggregate": "preview",

@@ -133,7 +133,7 @@ export function createTab(input: {
   readonly previewTabId?: string | null;
 }): DeckTab {
   return {
-    id: createPaneId(input.kind === "terminal" ? "term" : "web"),
+    id: createPaneId(input.kind === "terminal" ? "term" : input.kind === "sql" ? "sql" : "web"),
     kind: input.kind,
     ...(input.kind === "terminal" && input.terminalId !== undefined
       ? { terminalId: input.terminalId }

@@ -12,7 +12,7 @@
  * Everything here is pure so it can be tested without a store.
  */
 
-export type DeckTabKind = "terminal" | "browser";
+export type DeckTabKind = "terminal" | "browser" | "sql";
 
 export type DeckSplitDirection = "horizontal" | "vertical";
 
@@ -515,7 +515,9 @@ function normalizeTab(raw: unknown, seenIds: Set<string>): DeckTab | null {
   const candidate = raw as Partial<DeckTab>;
   const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
   if (id.length === 0 || seenIds.has(id)) return null;
-  if (candidate.kind !== "terminal" && candidate.kind !== "browser") return null;
+  if (candidate.kind !== "terminal" && candidate.kind !== "browser" && candidate.kind !== "sql") {
+    return null;
+  }
   seenIds.add(id);
   const title = typeof candidate.title === "string" ? candidate.title.trim() : "";
   return {
