@@ -55,7 +55,29 @@ sends you back to the index.
 
 A pane is a stack of tabs and the kind lives on the tab, so one pane can hold
 terminals and browsers together. Closing the last tab closes the pane and the
-surrounding split collapses.
+surrounding split collapses; the window then offers ⌘T instead of a grid, and
+the next tab rebuilds the root pane.
+
+Closing a tab also closes the session behind it — the PTY with its history, or
+the preview tab — and closing a window closes every session of its thread.
+`term-N` ids are handed out from the ids in use, so a leaked session would be
+reattached by the next tab under the same id: old output back on screen, and an
+`exit`ed session reattaching exited, which the viewport reads as another exit
+and closes the new tab as it opens. "In use" counts the thread's server-side
+sessions as well as the deck's tabs, because upstream's drawer and mobile create
+terminals under the same thread — a tab given an id they already hold would
+attach to their PTY and kill it on close, leaving them writing to a session the
+server no longer has. Seeding a window's first pane therefore waits for the
+terminal metadata query; until it answers the window shows "Opening terminal…"
+rather than allocating `term-1` blind. A failed query counts as answered — an
+empty window is worse than a risked id.
+
+Reusing an id is safe on the server and still not safe in the client: the attach
+atom outlives its subscribers by a five-minute idle TTL, so a session closed in
+between leaves a cached state — status `closed`, the old scrollback, no attach
+call on the next mount. `TerminalViewport` therefore refreshes the atom when it
+mounts, which reopens the session instead of showing a prompt from a shell that
+no longer exists and failing every keystroke.
 
 Inactive tabs stay mounted. Unmounting a terminal drops its scrollback and xterm
 state, and unmounting a `<webview>` tears the page down entirely. They are
@@ -69,20 +91,37 @@ inactive surfaces at `HIDDEN_BROWSER_WEBVIEW_OFFSET` instead, driven by
 
 ## Files the fork owns
 
-| Path                                                          | Purpose                                                                     |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `apps/web/src/deck/paneTree.ts`                               | Pure split-tree and tab model (n-ary splits, sizes, normalization)          |
-| `apps/web/src/deck/deckStore.ts`                              | Per-thread layout, persisted like `terminalUiStateStore`                    |
-| `apps/web/src/deck/deckWindowStore.ts`                        | Windows per project: create, rename, close, reorder                         |
-| `apps/web/src/deck/DeckSidebar.tsx`                           | Projects and their windows                                                  |
-| `apps/web/src/deck/DeckPaneGrid.tsx`                          | Nested CSS grids with draggable dividers                                    |
-| `apps/web/src/deck/DeckWorkspace.tsx`                         | Toolbar, pane bootstrap, tab strips, terminal and browser tabs              |
-| `apps/web/src/deck/DeckDevToolsSlot.tsx`                      | Keeps the docked DevTools view aligned with its slot                        |
-| `apps/web/src/deck/DeckPalette.tsx`                           | ⌘K palette over windows and creation actions                                |
-| `apps/web/src/deck/deckShortcuts.ts`                          | Keyboard mapping, matched in the capture phase                              |
-| `apps/web/src/deck/deckMode.ts`                               | Pane mode toggle (`?deck=0` restores upstream chat)                         |
-| `apps/web/src/routes/_chat.deck.$environmentId.$windowId.tsx` | The window route                                                            |
-| `apps/web/src/components/TerminalViewport.tsx`                | Extracted from `ThreadTerminalDrawer` so drawer and grid share one terminal |
+| Path                                                          | Purpose                                                                                 |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `apps/web/src/deck/paneTree.ts`                               | Pure split-tree and tab model (n-ary splits, sizes, normalization)                      |
+| `apps/web/src/deck/deckStore.ts`                              | Per-thread layout, persisted like `terminalUiStateStore`                                |
+| `apps/web/src/deck/deckWindowStore.ts`                        | Windows per project: create, rename, close, reorder                                     |
+| `apps/web/src/deck/DeckSidebar.tsx`                           | Projects and their windows                                                              |
+| `apps/web/src/deck/DeckPaneGrid.tsx`                          | Nested CSS grids with draggable dividers                                                |
+| `apps/web/src/deck/DeckWorkspace.tsx`                         | Toolbar, pane bootstrap, tab strips, terminal and browser tabs                          |
+| `apps/web/src/deck/DeckDevToolsSlot.tsx`                      | Keeps the docked DevTools view aligned with its slot                                    |
+| `apps/web/src/deck/DeckPalette.tsx`                           | ⌘K palette over windows and creation actions                                            |
+| `apps/web/src/deck/deckShortcuts.ts`                          | Keyboard mapping, matched in the capture phase                                          |
+| `apps/web/src/deck/deckTabSessions.ts`                        | Which server session a closing tab has to take down                                     |
+| `apps/web/src/deck/deckMode.ts`                               | Pane mode toggle (`?deck=0` restores upstream chat)                                     |
+| `apps/desktop/src/preview/deckForwardedShortcuts.ts`          | Keys a browser pane hands back to the window, beyond upstream's own                     |
+| `apps/web/src/routes/_chat.deck.$environmentId.$windowId.tsx` | The window route                                                                        |
+| `apps/web/src/components/TerminalViewport.tsx`                | Extracted from `ThreadTerminalDrawer` so drawer and grid share one terminal             |
+| `apps/web/src/components/terminalBufferSync.ts`               | Append or reset, decided from the buffer's stream offset and reset epoch                |
+| `apps/web/src/sql/SqlPanel.tsx`                               | SQL pane: connection picker, editor, object tree, results grid                          |
+| `apps/web/src/sql/SqlEditor.tsx`                              | CodeMirror 6 SQL editor, schema-aware completion, vim toggle, ⌘⏎ run                    |
+| `apps/web/src/sql/SqlObjectTree.tsx`                          | Lazy schema → object type → object → columns browser                                    |
+| `apps/web/src/sql/SqlResultsGrid.tsx`                         | Virtualized result grid; double-click edits cells where a row identity exists           |
+| `apps/web/src/sql/sqlGridEdit.ts`                             | Pure edit rules: editability, per-row UPDATE payloads, cell parsing                     |
+| `apps/web/src/sql/SqlConnectionsDialog.tsx`                   | Per-project connections CRUD, test, per-window visibility checkboxes                    |
+| `apps/web/src/sql/sqlPaneStore.ts`                            | Persisted pane state: per-tab connection + SQL, vim toggle, window allowlist            |
+| `apps/server/src/sql/SqlIdeService.ts`                        | SQL sessions per window tab: open/execute/cancel, tree, identity, row edits             |
+| `apps/server/src/sql/postgresDriver.ts`                       | porsager `postgres` driver + pg_catalog metadata queries                                |
+| `apps/server/src/sql/sqliteDriver.ts`                         | `node:sqlite` driver + sqlite_master/pragma metadata                                    |
+| `apps/server/src/sql/SqlCredentialStore.ts`                   | Passwords: macOS `security` / Linux `secret-tool`, file-store fallback                  |
+| `apps/server/src/sql/SqlConnectionStore.ts`                   | Connection configs (no secrets) in `state.sqlite` per project                           |
+| `apps/server/src/sql/pgpass.ts`                               | `.pgpass` parser and lookup, used before prompting                                      |
+| `apps/server/src/sql/sqlText.ts`                              | Statement splitter (strings/comments/dollar quotes), identifier quoting, UPDATE builder |
 
 ## Changes to upstream files
 
@@ -99,14 +138,29 @@ Kept deliberately small so rebases stay cheap:
   rename, change-request state) that does not apply to a window.
 - `apps/desktop/src/preview/Manager.ts`, `ipc/`, `preload.ts`,
   `packages/contracts/src/ipc.ts` — `openDevToolsDocked`, `setDevToolsBounds`
-  and `closeDevTools`; deck shortcuts added to `APP_FORWARDED_SHORTCUTS`; real
-  popups for OAuth instead of navigating the opener.
+  and `closeDevTools`; `forwardShortcut` also asks
+  `deckForwardedShortcuts.ts`, leaving upstream's `APP_FORWARDED_SHORTCUTS`
+  alone; real popups for OAuth instead of navigating the opener.
+- `packages/client-runtime/src/state/terminalSession.ts` — `resetEpoch`,
+  `streamOffset` and `bufferBytes` on the buffer state, a trimmed buffer resumes
+  at a control boundary, and the buffer may overshoot the cap by a quarter
+  before it is cut back. The overshoot is what keeps scrolling smooth: trimming
+  encodes the whole buffer, so doing it per output event costs a pass over half
+  a megabyte per redraw. The fields are required, so a merge that adds a
+  construction site upstream fails typecheck rather than mirroring a terminal
+  wrongly.
 - `apps/desktop/src/preview/BrowserSession.ts` — permission prompts and the
   blocklist check.
 - `apps/desktop/src/window/DesktopApplicationMenu.ts` — Close Window keeps its
   menu entry but releases ⌘W, which deck binds to closing a tab.
 - `apps/web/vite.config.ts` — `T3CODE_WEB_REACT_COMPILER=0` skips the React
   Compiler babel pass, which OOMs on memory-constrained hosts.
+- SQL IDE wiring: `packages/contracts/src/sql.ts` + `rpc.ts` (`sql.*` methods),
+  `apps/server/src/ws.ts` handlers (scope `terminal:operate`),
+  `apps/server/src/server.ts` (`SqlIdeLayerLive`), migration
+  `035_SqlConnections`, `packages/client-runtime/src/state/sql.ts` atoms, and a
+  third deck tab kind `"sql"` across `paneTree.ts`/`deckStore.ts`/
+  `DeckWorkspace.tsx`/`DeckPalette.tsx`.
 
 ## Run
 
@@ -170,8 +224,11 @@ previous list rather than silently dropping protection.
 These run on a capture-phase listener, because xterm claims keys on the
 terminal element and only lets a fixed set past its own handler. Keys pressed
 inside a browser pane belong to the guest, so they are also listed in
-`APP_FORWARDED_SHORTCUTS` in the preview manager, which forwards them to the
-window.
+`deckForwardedShortcuts.ts`, which the preview manager consults alongside
+upstream's own list before replaying the key into the window. `⌘B` and `⌥⌘B`
+are forwarded too: they are T3's, but a focused pane would otherwise swallow
+them. A letter chord replays its physical key, since ⌥ rewrites the reported
+one (`⌥B` arrives as `∫`).
 
 ## DevTools in browser tabs
 

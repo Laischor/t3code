@@ -58,6 +58,7 @@ describe("buildDeckPaletteItems", () => {
     expect(buildDeckPaletteItems([]).map((item) => item.kind)).toEqual([
       "new-terminal",
       "new-browser",
+      "new-sql",
       "new-project",
     ]);
   });

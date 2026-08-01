@@ -9,11 +9,12 @@
 
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
-import { type ScopedThreadRef } from "@t3tools/contracts";
+import { type ProjectId, type ScopedThreadRef } from "@t3tools/contracts";
 import { getTerminalLabel, nextTerminalId } from "@t3tools/shared/terminalLabels";
 import {
   ChevronDownIcon,
   Code2,
+  DatabaseIcon,
   Globe,
   PlusIcon,
   SquareSplitHorizontal,
@@ -32,18 +33,25 @@ import {
   type ReactNode,
 } from "react";
 
+import { closePreviewSession } from "~/components/preview/closePreviewSession";
 import { openPreviewSession } from "~/components/preview/openPreviewSession";
 import { TerminalViewport } from "~/components/TerminalViewport";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { cn } from "~/lib/utils";
+import { readThreadPreviewState } from "~/previewStateStore";
+import { sqlTabKey, useSqlPaneStore } from "~/sql/sqlPaneStore";
 import { previewEnvironment } from "../state/preview";
+import { useEnvironmentQuery } from "../state/query";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { sqlEnvironment } from "../state/sql";
+import { terminalEnvironment } from "../state/terminal";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DeckDevToolsSlot } from "./DeckDevToolsSlot";
 import { DeckFindBar } from "./DeckFindBar";
 import { DeckPalette } from "./DeckPalette";
 import { DeckPaneGrid } from "./DeckPaneGrid";
 import { createPaneLeaf, createTab, selectThreadPaneState, useDeckStore } from "./deckStore";
+import { deckTerminalIdsInUse, tabSessionTarget } from "./deckTabSessions";
 import { findWindowProject, parseDeckProjectKey, useDeckWindowStore } from "./deckWindowStore";
 import { matchDeckShortcut, stepTabIndex } from "./deckShortcuts";
 import {
@@ -67,6 +75,8 @@ const PreviewPanel = lazy(() =>
   })),
 );
 
+const SqlPanel = lazy(() => import("~/sql/SqlPanel"));
+
 export interface DeckWorkspaceProps {
   threadRef: ScopedThreadRef;
   cwd: string;
@@ -80,7 +90,17 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
+  const closePreview = useAtomCommand(previewEnvironment.close, { reportFailure: false });
+  const closeTerminalSession = useAtomCommand(terminalEnvironment.close, "terminal close");
+  const closeSqlSession = useAtomCommand(sqlEnvironment.close, { reportFailure: false });
   const navigate = useNavigate();
+  // The project this window belongs to; SQL connections are stored per project.
+  const windowsByProjectKey = useDeckWindowStore((store) => store.windowsByProjectKey);
+  const deckProjectId = useMemo(() => {
+    const found = findWindowProject(windowsByProjectKey, threadRef.threadId);
+    const ref = found ? parseDeckProjectKey(found.projectKey) : null;
+    return ref?.projectId ?? null;
+  }, [threadRef.threadId, windowsByProjectKey]);
   const [focusRequestId, setFocusRequestId] = useState(0);
   // The browser tab that should open with its URL bar focused, cleared once it
   // has been handled so switching back later does not steal focus again.
@@ -92,13 +112,26 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
   // Tab whose find bar is open; only browser tabs can have one.
   const [findTabId, setFindTabId] = useState<string | null>(null);
 
+  // The ids a new tab must avoid include the thread's server-side sessions, not
+  // just this deck's tabs — see `deckTerminalIdsInUse`. The metadata query is
+  // read directly rather than through `useKnownTerminalSessions` because seeding
+  // needs to know whether it has answered yet, which that hook drops.
+  const terminalMetadata = useEnvironmentQuery(
+    terminalEnvironment.metadata({ environmentId: threadRef.environmentId, input: null }),
+  );
   const usedTerminalIds = useMemo(
     () =>
-      paneTabs(paneState.root).flatMap((tab) =>
-        tab.kind === "terminal" && tab.terminalId ? [tab.terminalId] : [],
+      deckTerminalIdsInUse(
+        paneTabs(paneState.root),
+        (terminalMetadata.data ?? [])
+          .filter((summary) => summary.threadId === threadRef.threadId)
+          .map((summary) => summary.terminalId),
       ),
-    [paneState.root],
+    [paneState.root, terminalMetadata.data, threadRef.threadId],
   );
+  // A failed query never resolves into ids, so it counts as settled: a window
+  // with no terminal at all is worse than one that risks an id.
+  const terminalIdsSettled = terminalMetadata.data !== null || terminalMetadata.error !== null;
 
   // Seed the thread with a single terminal the first time it is opened.
   const bootstrappedRef = useRef<string | null>(null);
@@ -109,14 +142,19 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       return;
     }
     if (bootstrappedRef.current === key) return;
+    // Seeding before the thread's sessions are known would pick `term-1` blind
+    // and could attach the window's first terminal to someone else's PTY.
+    if (!terminalIdsSettled) return;
     bootstrappedRef.current = key;
     useDeckStore
       .getState()
       .ensureRootPane(
         threadRef,
-        createPaneLeaf(createTab({ kind: "terminal", terminalId: nextTerminalId([]) })),
+        createPaneLeaf(
+          createTab({ kind: "terminal", terminalId: nextTerminalId(usedTerminalIds) }),
+        ),
       );
-  }, [paneState.root, threadRef]);
+  }, [paneState.root, terminalIdsSettled, threadRef, usedTerminalIds]);
 
   const targetPaneId = paneState.activePaneId;
 
@@ -134,13 +172,28 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
 
   const addTab = useCallback(
     (kind: DeckTab["kind"], paneId?: string) => {
-      const pane = paneId ?? targetPaneId;
-      if (!pane) return;
       const tab =
         kind === "terminal"
           ? createTab({ kind, terminalId: nextTerminalId(usedTerminalIds) })
-          : createTab({ kind, previewTabId: null });
-      useDeckStore.getState().addTab(threadRef, pane, tab);
+          : kind === "sql"
+            ? createTab({ kind })
+            : createTab({ kind, previewTabId: null });
+      const current = selectThreadPaneState(
+        useDeckStore.getState().paneStateByThreadKey,
+        threadRef,
+      );
+      const requested = paneId ?? targetPaneId;
+      const target =
+        requested && findLeaf(current.root, requested)
+          ? requested
+          : (paneLeaves(current.root)[0]?.id ?? null);
+      if (target) {
+        useDeckStore.getState().addTab(threadRef, target, tab);
+      } else {
+        // Closing the last tab took the pane with it; the next tab rebuilds one
+        // instead of leaving the window with nowhere to put it.
+        useDeckStore.getState().ensureRootPane(threadRef, createPaneLeaf(tab));
+      }
       setFocusRequestId((value) => value + 1);
       if (kind === "browser") {
         setPendingUrlFocusTabId(tab.id);
@@ -161,11 +214,53 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
     [threadRef, usedTerminalIds],
   );
 
+  /** Kills the session a closing tab owns; see `tabSessionTarget`. */
+  const disposeTabSession = useCallback(
+    (tab: DeckTab) => {
+      const target = tabSessionTarget(tab);
+      if (!target) return;
+      if (target.kind === "terminal") {
+        void closeTerminalSession({
+          environmentId: threadRef.environmentId,
+          input: {
+            threadId: threadRef.threadId,
+            terminalId: target.terminalId,
+            deleteHistory: true,
+          },
+        });
+        return;
+      }
+      if (target.kind === "sql") {
+        void closeSqlSession({
+          environmentId: threadRef.environmentId,
+          input: { threadId: threadRef.threadId, sessionId: target.sessionId },
+        });
+        useSqlPaneStore
+          .getState()
+          .removeTab(sqlTabKey(`${threadRef.environmentId}/${threadRef.threadId}`, tab.id));
+        return;
+      }
+      void closePreviewSession({
+        closePreview,
+        snapshot: readThreadPreviewState(threadRef).sessions[target.previewTabId] ?? null,
+        tabId: target.previewTabId,
+        threadRef,
+      });
+    },
+    [closePreview, closeSqlSession, closeTerminalSession, threadRef],
+  );
+
   const closeTab = useCallback(
     (tabId: string) => {
+      const current = selectThreadPaneState(
+        useDeckStore.getState().paneStateByThreadKey,
+        threadRef,
+      );
+      const tab = paneTabs(current.root).find((entry) => entry.id === tabId) ?? null;
       useDeckStore.getState().closeTab(threadRef, tabId);
+      if (tab) disposeTabSession(tab);
     },
-    [threadRef],
+    [disposeTabSession, threadRef],
   );
 
   const renameTab = useCallback(
@@ -300,6 +395,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         {...(runtimeEnv !== undefined ? { runtimeEnv } : {})}
         keybindings={keybindings}
         focusRequestId={focusRequestId}
+        projectId={deckProjectId}
         onSelectTab={(tabId) => activateTab(leaf.id, tabId)}
         onCloseTab={closeTab}
         onAddTab={(kind) => addTab(kind, leaf.id)}
@@ -320,6 +416,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
       addTab,
       closeTab,
       cwd,
+      deckProjectId,
       focusRequestId,
       keybindings,
       runtimeEnv,
@@ -342,6 +439,7 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
         onClose={() => setPaletteOpen(false)}
         onNewTerminalTab={() => addTab("terminal")}
         onNewBrowserTab={() => addTab("browser")}
+        onNewSqlTab={() => addTab("sql")}
       />
       <div className="min-h-0 flex-1 p-1">
         {paneState.root ? (
@@ -353,8 +451,36 @@ export function DeckWorkspace({ threadRef, cwd, worktreePath, runtimeEnv }: Deck
             renderPane={renderPane}
             hideActiveBorder={leaves.length <= 1}
           />
-        ) : (
+        ) : !terminalIdsSettled ? (
+          // Seeding waits for the thread's session ids, so say so rather than
+          // offering buttons that would allocate an id blind.
           <PaneMessage>Opening terminal…</PaneMessage>
+        ) : (
+          // Reachable both before the first pane is seeded and after the last
+          // tab was closed, so it offers a way back instead of only a message.
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+            <p>No tabs open.</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs hover:bg-accent hover:text-foreground"
+                onClick={() => addTab("terminal")}
+              >
+                <TerminalSquare className="size-3.5" />
+                New terminal
+                <span className="text-muted-foreground">⌘T</span>
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs hover:bg-accent hover:text-foreground"
+                onClick={() => addTab("browser")}
+              >
+                <Globe className="size-3.5" />
+                New browser
+                <span className="text-muted-foreground">⇧⌘T</span>
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -424,6 +550,7 @@ function TabNameInput({
 
 function tabTitle(tab: DeckTab): string {
   if (tab.title) return tab.title;
+  if (tab.kind === "sql") return "SQL";
   return tab.kind === "terminal" ? getTerminalLabel(tab.terminalId ?? tab.id) : "Browser";
 }
 
@@ -451,6 +578,8 @@ interface PaneTabsProps {
   onDragTabChange: (tabId: string | null) => void;
   /** Leaves room for the window controls when the sidebar is collapsed. */
   insetForTitlebar: boolean;
+  /** Project this window belongs to; SQL panes need it for their connections. */
+  projectId: string | null;
 }
 
 function PaneTabs({
@@ -475,6 +604,7 @@ function PaneTabs({
   draggingTabId,
   onDragTabChange,
   insetForTitlebar,
+  projectId,
 }: PaneTabsProps) {
   const current = activeTab(leaf);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
@@ -560,6 +690,8 @@ function PaneTabs({
               ) : null}
               {tab.kind === "terminal" ? (
                 <TerminalSquare className="size-3.5 shrink-0 opacity-60" />
+              ) : tab.kind === "sql" ? (
+                <DatabaseIcon className="size-3.5 shrink-0 opacity-60" />
               ) : (
                 <Globe className="size-3.5 shrink-0 opacity-60" />
               )}
@@ -626,6 +758,10 @@ function PaneTabs({
               Browser
               <span className="ml-auto text-xs text-muted-foreground">⇧⌘T</span>
             </MenuItem>
+            <MenuItem onClick={() => onAddTab("sql")}>
+              <DatabaseIcon className="size-3.5" />
+              SQL
+            </MenuItem>
           </MenuPopup>
         </Menu>
 
@@ -688,6 +824,8 @@ function PaneTabs({
                   focusRequestId={focusRequestId}
                   onExited={() => onCloseTab(tab.id)}
                 />
+              ) : tab.kind === "sql" ? (
+                <SqlTab tab={tab} threadRef={threadRef} projectId={projectId} />
               ) : (
                 <BrowserTab
                   tab={tab}
@@ -872,5 +1010,30 @@ function BrowserTab({
         </>
       ) : null}
     </div>
+  );
+}
+
+function SqlTab({
+  tab,
+  threadRef,
+  projectId,
+}: {
+  tab: DeckTab;
+  threadRef: ScopedThreadRef;
+  projectId: string | null;
+}) {
+  if (projectId === null) {
+    return <PaneMessage>This window has no project; SQL connections live per project.</PaneMessage>;
+  }
+  return (
+    <Suspense fallback={<PaneMessage>Loading SQL pane…</PaneMessage>}>
+      <SqlPanel
+        environmentId={threadRef.environmentId}
+        projectId={projectId as ProjectId}
+        threadId={threadRef.threadId}
+        tabId={tab.id}
+        threadKey={`${threadRef.environmentId}/${threadRef.threadId}`}
+      />
+    </Suspense>
   );
 }

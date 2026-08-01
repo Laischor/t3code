@@ -8,6 +8,7 @@
  */
 
 import { useNavigate, useParams } from "@tanstack/react-router";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -23,6 +24,10 @@ import {
 import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 import { useProjects } from "../state/entities";
+import { previewEnvironment } from "../state/preview";
+import { terminalEnvironment } from "../state/terminal";
+import { useAtomCommand } from "../state/use-atom-command";
+import { useDeckStore } from "./deckStore";
 import {
   deckProjectKey,
   useDeckWindowStore,
@@ -38,6 +43,11 @@ export function DeckSidebar() {
     strict: false,
     select: (params) => (params as { windowId?: string }).windowId ?? null,
   });
+  const closeThreadTerminals = useAtomCommand(terminalEnvironment.close, {
+    label: "terminal close",
+    reportFailure: false,
+  });
+  const closeThreadPreviews = useAtomCommand(previewEnvironment.close, { reportFailure: false });
 
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const toggleProject = useCallback((key: string) => {
@@ -72,13 +82,29 @@ export function DeckSidebar() {
       const successor = (
         useDeckWindowStore.getState().windowsByProjectKey[deckProjectKey(ref)] ?? []
       ).find((entry) => entry.id !== window.id);
+      // A window id *is* the thread id both managers key by, so one call each
+      // takes down every terminal and browser session the window held. Without
+      // it the PTYs outlive the window nothing can reach any more.
+      const threadRef = {
+        environmentId: EnvironmentId.make(ref.environmentId),
+        threadId: ThreadId.make(window.id),
+      };
+      void closeThreadTerminals({
+        environmentId: threadRef.environmentId,
+        input: { threadId: threadRef.threadId, deleteHistory: true },
+      });
+      void closeThreadPreviews({
+        environmentId: threadRef.environmentId,
+        input: { threadId: threadRef.threadId },
+      });
+      useDeckStore.getState().clearPaneState(threadRef);
       useDeckWindowStore.getState().closeWindow(ref, window.id);
       // Only move if the window being closed is the one on screen.
       if (activeWindowId !== window.id) return;
       if (successor) openWindow(ref, successor);
       else void navigate({ to: "/" });
     },
-    [activeWindowId, navigate, openWindow],
+    [activeWindowId, closeThreadPreviews, closeThreadTerminals, navigate, openWindow],
   );
 
   const sortedProjects = useMemo(

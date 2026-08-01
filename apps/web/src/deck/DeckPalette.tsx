@@ -6,7 +6,14 @@
  */
 
 import { useNavigate } from "@tanstack/react-router";
-import { FolderPlus, Globe, PlusIcon, SquareTerminal, TerminalSquare } from "lucide-react";
+import {
+  DatabaseIcon,
+  FolderPlus,
+  Globe,
+  PlusIcon,
+  SquareTerminal,
+  TerminalSquare,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { inferProjectTitleFromPath } from "~/lib/projectPaths";
@@ -30,6 +37,7 @@ export interface DeckPaletteProps {
   onClose: () => void;
   onNewTerminalTab: () => void;
   onNewBrowserTab: () => void;
+  onNewSqlTab: () => void;
 }
 
 export function DeckPalette({
@@ -37,6 +45,7 @@ export function DeckPalette({
   onClose,
   onNewTerminalTab,
   onNewBrowserTab,
+  onNewSqlTab,
 }: DeckPaletteProps) {
   const navigate = useNavigate();
   const projects = useProjects();
@@ -145,6 +154,9 @@ export function DeckPalette({
       case "new-browser":
         onNewBrowserTab();
         return;
+      case "new-sql":
+        onNewSqlTab();
+        return;
       case "new-project":
         void addProject();
         return;
@@ -227,6 +239,8 @@ function PaletteIcon({ kind }: { kind: DeckPaletteItem["kind"] }) {
       return <TerminalSquare className={className} />;
     case "new-browser":
       return <Globe className={className} />;
+    case "new-sql":
+      return <DatabaseIcon className={className} />;
     case "new-project":
       return <FolderPlus className={className} />;
   }
