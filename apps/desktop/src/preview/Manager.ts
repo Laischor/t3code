@@ -28,6 +28,7 @@ import type {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+import { deckForwardedKeyCode, isDeckForwardedShortcut } from "./deckForwardedShortcuts.ts";
 import { parsePopupFeatures } from "./popupFeatures.ts";
 
 /** How long to give DevTools to attach before treating the dock as failed. */
@@ -417,26 +418,6 @@ const APP_FORWARDED_SHORTCUTS: ReadonlyArray<{
   { key: ",", meta: true, shift: false, control: false },
   // mod+W → close tab/panel
   { key: "w", meta: true, shift: false, control: false },
-  // Deck tab shortcuts. Without these a click into a browser pane swallows
-  // them: the guest owns the key event and the embedder never sees it.
-  // mod+T → new terminal tab
-  { key: "t", meta: true, shift: false, control: false },
-  // mod+shift+T → new browser tab
-  { key: "t", meta: true, shift: true, control: false },
-  // ctrl+tab / ctrl+shift+tab → cycle tabs
-  { key: "Tab", meta: false, shift: false, control: true },
-  { key: "Tab", meta: false, shift: true, control: true },
-  // mod+N → new window
-  { key: "n", meta: true, shift: false, control: false },
-  // mod+F → find in page. Forwarding matters most here: the guest has focus
-  // whenever you are reading the page you want to search.
-  { key: "f", meta: true, shift: false, control: false },
-  // mod+shift+] / mod+shift+[ → cycle tabs. Shift reports the shifted
-  // character on most layouts, so both forms are listed.
-  { key: "]", meta: true, shift: true, control: false },
-  { key: "}", meta: true, shift: true, control: false },
-  { key: "[", meta: true, shift: true, control: false },
-  { key: "{", meta: true, shift: true, control: false },
 ]);
 
 const isPreviewInputSignal = (value: unknown): value is PreviewInputSignal => {
@@ -1341,13 +1322,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       input: Electron.Input,
     ) {
       const mainWindow = yield* Ref.get(mainWindowRef);
-      if (!isAppShortcut(input) || Option.isNone(mainWindow) || mainWindow.value.isDestroyed()) {
+      const forwarded = isAppShortcut(input) || isDeckForwardedShortcut(input);
+      if (!forwarded || Option.isNone(mainWindow) || mainWindow.value.isDestroyed()) {
         return;
       }
       event.preventDefault();
       mainWindow.value.webContents.sendInputEvent({
         type: "keyDown",
-        keyCode: input.key,
+        keyCode: deckForwardedKeyCode(input) ?? input.key,
         modifiers: [
           ...(input.meta ? (["meta"] as const) : []),
           ...(input.shift ? (["shift"] as const) : []),
