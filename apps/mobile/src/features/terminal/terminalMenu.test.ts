@@ -62,6 +62,8 @@ function makeKnownSession(input: {
       hasRunningSubprocess: false,
       updatedAt: input.updatedAt ?? "2026-04-15T20:00:00.000Z",
       version: 1,
+      resetEpoch: 1,
+      streamOffset: 0,
     },
   };
 }

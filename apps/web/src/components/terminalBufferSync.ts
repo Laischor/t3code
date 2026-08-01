@@ -2,20 +2,26 @@
  * Decides what to write into xterm when the session buffer changes.
  *
  * The session buffer is capped (`trimBufferToBytes`, 512 KB) and trimmed from
- * the front, so once a program produces more than that the new buffer is no
- * longer a continuation of the old one. Treating that as "unrelated" means a
- * full reset — `c` plus a rewrite of the whole buffer — on every update,
- * which is a visible flash. Full-screen programs hit it on every keystroke,
- * because each redraw is kilobytes.
+ * the front, so the new buffer is not always a continuation of the old one.
+ * Comparing the two strings cannot tell an append from a repeated frame: a
+ * redraw-heavy program emits the same bytes over and over, so any seam search
+ * has more than one plausible answer, and picking the wrong one drops or
+ * repeats escape sequences — the terminal then keeps stale cells forever,
+ * because the dropped bytes were the ones that would have erased them.
  *
- * Recognising a front-trim turns those back into ordinary appends.
+ * So the buffer state carries the two numbers that answer it exactly:
+ * `streamOffset` counts every character the stream appended before trimming,
+ * and `resetEpoch` changes whenever the buffer stopped continuing the previous
+ * one. The delta is then plain arithmetic, and the trimmed front never matters
+ * because new output is always at the tail.
  */
 
-/**
- * How much of the previous buffer's tail is used to find the seam. Large enough
- * that a coincidental match is implausible, small enough to stay cheap.
- */
-const ANCHOR_LENGTH = 2048;
+/** The parts of the session buffer state that decide the next write. */
+export interface TerminalBufferPosition {
+  readonly buffer: string;
+  readonly resetEpoch: number;
+  readonly streamOffset: number;
+}
 
 export type TerminalWrite =
   /** Append `data`; the terminal keeps its current contents. */
@@ -23,28 +29,24 @@ export type TerminalWrite =
   /** Reset and rewrite; the buffers have no recoverable relationship. */
   | { readonly mode: "reset"; readonly data: string };
 
-export function resolveTerminalWrite(previous: string, current: string): TerminalWrite {
-  if (previous.length === 0) {
-    return { mode: "reset", data: current };
+export function resolveTerminalWrite(
+  previous: TerminalBufferPosition,
+  current: TerminalBufferPosition,
+): TerminalWrite {
+  if (current.resetEpoch !== previous.resetEpoch) {
+    return { mode: "reset", data: current.buffer };
   }
-  if (current === previous) {
+
+  const appended = current.streamOffset - previous.streamOffset;
+  if (appended <= 0) {
     return { mode: "append", data: "" };
   }
-  // The common case: output was appended and nothing was trimmed.
-  if (current.length >= previous.length && current.startsWith(previous)) {
-    return { mode: "append", data: current.slice(previous.length) };
+
+  // More arrived than the cap retains, so the tail alone is not the whole
+  // delta. Only reachable when a single batch of output exceeds 512 KB.
+  if (appended > current.buffer.length) {
+    return { mode: "reset", data: current.buffer };
   }
 
-  // Otherwise the front may have been trimmed. The tail of the old buffer must
-  // still appear in the new one; everything after it is what is actually new.
-  const anchor = previous.slice(-Math.min(ANCHOR_LENGTH, previous.length));
-  const seam = current.lastIndexOf(anchor);
-  if (seam >= 0) {
-    // lastIndexOf on purpose: a redraw-heavy program repeats itself, and
-    // resuming at the newest match may skip an intermediate frame but can
-    // never duplicate output. The newest frame repaints the screen anyway.
-    return { mode: "append", data: current.slice(seam + anchor.length) };
-  }
-
-  return { mode: "reset", data: current };
+  return { mode: "append", data: current.buffer.slice(current.buffer.length - appended) };
 }

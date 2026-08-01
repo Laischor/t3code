@@ -6,7 +6,7 @@
  * from its container, so hosts only need to give it a box.
  */
 
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { FitAddon } from "@xterm/addon-fit";
 import {
   isAtomCommandInterrupted,
@@ -15,6 +15,7 @@ import {
 import {
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
+  type TerminalAttachInput,
   type ThreadId,
 } from "@t3tools/contracts";
 import { Terminal, type ITheme } from "@xterm/xterm";
@@ -318,16 +319,40 @@ export function TerminalViewport({
     onAddTerminalContext(selection);
   });
   const readTerminalLabel = useEffectEvent(() => terminalLabel);
-  const terminalSession = useAttachedTerminalSession({
-    environmentId,
-    terminal: {
+  // One object for both the subscription and its refresh: the attach atom is
+  // keyed by `JSON.stringify` of exactly this input, so a second literal would
+  // address a different atom — and open a second session.
+  const attachInput = useMemo<TerminalAttachInput>(
+    () => ({
       threadId,
       terminalId,
       cwd,
       ...(worktreePath !== undefined ? { worktreePath } : {}),
       ...(runtimeEnv ? { env: runtimeEnv } : {}),
-    },
+    }),
+    [cwd, runtimeEnv, terminalId, threadId, worktreePath],
+  );
+  const terminalSession = useAttachedTerminalSession({
+    environmentId,
+    terminal: attachInput,
   });
+  /**
+   * Re-attach whenever a terminal is mounted onto this session.
+   *
+   * The attach atom outlives its subscribers by its idle TTL, holding the last
+   * buffer it saw. That is what makes switching tabs cheap, but it also means a
+   * session closed in the meantime leaves a cached state behind: status
+   * `closed`, the old scrollback, and no attach call on the next mount. A tab
+   * that then reuses the id shows a prompt from a shell that no longer exists
+   * and fails every keystroke with `Unknown terminal thread`. Refreshing re-runs
+   * the attach, which reopens the session or reattaches to the live one.
+   */
+  const refreshAttachedSession = useAtomRefresh(
+    terminalEnvironment.attach({ environmentId, input: attachInput }),
+  );
+  useEffect(() => {
+    refreshAttachedSession();
+  }, [refreshAttachedSession]);
   const writeTerminal = useEffectEvent((data: string) =>
     runTerminalWrite({
       environmentId,
@@ -344,11 +369,15 @@ export function TerminalViewport({
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
   const terminalVersion = terminalSession.version;
+  const terminalResetEpoch = terminalSession.resetEpoch;
+  const terminalStreamOffset = terminalSession.streamOffset;
   const previousSessionRef = useRef({
     buffer: terminalBuffer,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
+    resetEpoch: terminalResetEpoch,
+    streamOffset: terminalStreamOffset,
   });
 
   useEffect(() => {
@@ -382,6 +411,8 @@ export function TerminalViewport({
       status: "closed",
       error: null,
       version: 0,
+      resetEpoch: 0,
+      streamOffset: 0,
     };
 
     const clearSelectionAction = () => {
@@ -719,6 +750,8 @@ export function TerminalViewport({
       error: terminalError,
       status: terminalStatus,
       version: terminalVersion,
+      resetEpoch: terminalResetEpoch,
+      streamOffset: terminalStreamOffset,
     };
     if (!terminal) {
       previousSessionRef.current = current;
@@ -730,10 +763,9 @@ export function TerminalViewport({
       return;
     }
 
-    // The session buffer is capped and trimmed from the front, so a plain
-    // prefix check calls an ordinary append "unrelated" and resets the terminal
-    // on every update once a program outpaces the cap.
-    const write = resolveTerminalWrite(previous.buffer, current.buffer);
+    // The session buffer is capped and trimmed from the front, so the delta
+    // comes from the stream's own offset rather than from comparing strings.
+    const write = resolveTerminalWrite(previous, current);
     if (write.mode === "append") {
       if (write.data.length > 0) terminal.write(write.data);
     } else {
@@ -770,7 +802,15 @@ export function TerminalViewport({
       });
     }
     previousSessionRef.current = current;
-  }, [autoFocus, terminalBuffer, terminalError, terminalStatus, terminalVersion]);
+  }, [
+    autoFocus,
+    terminalBuffer,
+    terminalError,
+    terminalResetEpoch,
+    terminalStatus,
+    terminalStreamOffset,
+    terminalVersion,
+  ]);
 
   useEffect(() => {
     if (!autoFocus) return;
